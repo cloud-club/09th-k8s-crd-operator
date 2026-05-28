@@ -1,0 +1,10 @@
+apiVersion: app.example.com/v1
+kind: MyApp
+metadata:
+  labels:
+    app.kubernetes.io/name: my-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: myapp-sample
+spec:
+  replicas: 3
+  image: nginx:1.14
