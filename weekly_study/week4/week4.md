@@ -8,6 +8,8 @@
 
 ---
 
+<br>
+
 ## Reconcile 함수의 구조
 
 ### 1. 핵심 원칙: 멱등성 (Idempotency)
@@ -24,6 +26,8 @@ Reconcile 100번째 호출 ┘
 
 이 원칙 때문에 리소스를 무조건 생성하는 것이 아니라, 항상 **현재 상태를 확인한 뒤** 필요한 작업만 수행해야 합니다.
 
+<br>
+
 ### 2. Reconcile 함수 시그니처
 
 ```go
@@ -32,7 +36,7 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 }
 ```
 
-이 시그니처는 controller-runtime이 강제하는 **계약(contract)**입니다.
+이 시그니처는 controller-runtime이 강제하는 **계약(contract)** 입니다.
 
 #### `ctx context.Context`
 
@@ -77,6 +81,8 @@ Reconcile(ctx, req) 호출
 
 이벤트가 Queue에서 대기하는 동안 오브젝트가 또 바뀔 수 있기 때문입니다. 항상 **최신 상태를 직접 조회**하는 것이 원칙입니다.
 
+<br>
+
 ### 3. `ctrl.Result` — 리턴값
 
 ```go
@@ -92,7 +98,9 @@ type Result struct {
 | `Result{RequeueAfter: 30*time.Second}, nil` | 30초 후 다시 Reconcile |
 | `Result{}, err` | 에러. 지수 백오프(exponential backoff)로 재시도 |
 
-> ⚠️ `Requeue: true` 옵션은 공식적으로 **deprecated** 되었습니다. `RequeueAfter`를 사용하세요.
+> ⚠️ `Requeue: true` 옵션은 공식적으로 **deprecated** 되었습니다. `RequeueAfter`를 사용 권장
+
+<br>
 
 ### 4. Reconcile이 호출되는 전체 흐름
 
@@ -118,7 +126,9 @@ K8s API Server
 └─────────────┘
 ```
 
-WorkQueue는 동일한 오브젝트에 대한 이벤트를 **자동으로 중복 제거**합니다. Reconcile은 "무슨 이벤트가 몇 번 왔는지"를 신경 쓰지 않고, **지금 현재 상태를 보고 desired state로 맞추는 것**만 합니다.
+WorkQueue는 동일한 오브젝트에 대한 이벤트를 **자동으로 중복 제거**합니다. Reconcile은 무슨 이벤트가 몇 번 왔는지를 신경 쓰지 않고, **지금 현재 상태를 보고 desired state로 맞추는 것**만 합니다.
+
+<br>
 
 ### 5. Reconcile 함수 전체 뼈대
 
@@ -147,6 +157,9 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 ```
 
 ---
+
+<br>
+<br>
 
 ## 리소스 생성/조회/업데이트 로직 구현법
 
@@ -177,7 +190,9 @@ client.Client
     └── Patch()
 ```
 
-### 2. ⚠️ 반드시 알아야 할 캐시 동작 원칙
+<br>
+
+### 2. 반드시 알아야 할 캐시 동작 원칙
 
 기본 클라이언트는 로컬 공유 캐시에서 읽고 API 서버에 직접 씁니다. **쓰기 직후 Get이 업데이트된 리소스를 반환한다고 보장하지 않습니다.**
 
@@ -185,27 +200,28 @@ client.Client
 Create() 호출
     │
     ▼
-API Server에 직접 씀 ✅
+API Server에 직접 씀 
     │
     ▼
 Get() 호출 → 로컬 캐시에서 읽음
     │
     ▼
-캐시가 아직 동기화 전일 수 있음 ⚠️
+캐시가 아직 동기화 전일 수 있음 
 → 방금 Create한 오브젝트가 안 보일 수 있음!
 ```
 
 ```go
-// ❌ 이렇게 하면 안 됨 — Create 직후 Get으로 검증
+// 이렇게 하면 안 됨 — Create 직후 Get으로 검증
 r.Create(ctx, newDeploy)
 r.Get(ctx, ...)  // 캐시 미동기화로 못 찾을 수 있음
 
-// ✅ Create 후 바로 리턴 — 다음 Reconcile에서 자연스럽게 처리됨
+// Create 후 바로 리턴 — 다음 Reconcile에서 자연스럽게 처리됨
 if err := r.Create(ctx, newDeploy); err != nil {
     return ctrl.Result{}, err
 }
 return ctrl.Result{}, nil
 ```
+<br>
 
 ### 3. Get — 리소스 조회와 에러 분기
 
@@ -225,7 +241,9 @@ if err != nil {
 
 `IsNotFound`를 `nil`로 리턴하는 이유는 삭제된 오브젝트에 대한 Reconcile은 **정상 종료**이기 때문입니다. 에러로 처리하면 불필요한 재시도가 계속 발생합니다.
 
-### 4. "Get → IsNotFound → Create" 기본 패턴
+<br>
+
+### 4. Get → IsNotFound → Create 기본 패턴
 
 ```go
 func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -290,6 +308,7 @@ Deployment Get()
       ▼
   Update 로직
 ```
+<br>
 
 ### 5. 공식 헬퍼: `controllerutil.CreateOrUpdate()`
 
@@ -311,6 +330,8 @@ func CreateOrUpdate(
 "created"   → 새로 생성됨
 "updated"   → 기존 리소스 업데이트됨
 ```
+
+<br>
 
 공식 예제 코드:
 
@@ -351,6 +372,8 @@ if err != nil {
 }
 ```
 
+<br>
+
 `CreateOrUpdate` 내부 동작:
 
 ```
@@ -382,6 +405,8 @@ Create() 실행      변경 있으면 Update()
 | 실무 사용 | 특수 케이스 | 일반 케이스 |
 | status 업데이트 | 별도 처리 | ⚠️ MutateFn 내 status 변경은 무시됨 |
 
+<br>
+
 ### 6. `Update()` vs `Patch()` — 차이와 선택 기준
 
 필드 A, B를 가진 오브젝트에서 C를 추가하려 할 때, 오래된 구조체로 `Update()`를 보내면 C가 사라지지만 `Patch()`는 그렇지 않습니다.
@@ -400,6 +425,8 @@ Update() 동작                    Patch() 동작
 
 > `Update()` 전에는 반드시 `Get()`을 먼저 해야 합니다. 최신 상태를 가져온 뒤 수정하지 않으면 다른 컨트롤러가 추가한 필드가 유실됩니다.
 
+<br>
+
 공식 `Update` 예제:
 
 ```go
@@ -411,6 +438,8 @@ _ = c.Get(context.Background(), client.ObjectKey{
 controllerutil.AddFinalizer(pod, "new-finalizer")
 _ = c.Update(context.Background(), pod)
 ```
+
+<br>
 
 #### Patch 타입 종류
 
@@ -430,6 +459,8 @@ Patch 타입
     → JSON 바이트를 직접 전송
 ```
 
+<br>
+
 `MergeFrom` 사용 패턴:
 
 ```go
@@ -444,6 +475,8 @@ patch := client.MergeFrom(base)
 r.Patch(ctx, deployment, patch)
 ```
 
+<br>
+
 ### 7. Optimistic Locking & ResourceVersion
 
 K8s의 모든 오브젝트는 `metadata.resourceVersion` 필드를 가집니다. API Server가 오브젝트가 수정될 때마다 자동으로 값을 갱신합니다.
@@ -454,14 +487,14 @@ K8s의 모든 오브젝트는 `metadata.resourceVersion` 필드를 가집니다.
 A가 Get()           resourceVersion: "1000" 읽음
 B가 Get()           resourceVersion: "1000" 읽음
        ↓
-A가 Update()        resourceVersion: "1001"로 갱신 ✅
+A가 Update()        resourceVersion: "1001"로 갱신 
        ↓
 B가 Update() 시도   resourceVersion: "1000" 그대로 전송
        ↓
-API Server          "1000은 이미 지났음" → 409 Conflict ❌
+API Server          "1000은 이미 지났음" → 409 Conflict 
 ```
 
-이것이 **낙관적 잠금(Optimistic Locking)**입니다. 잠금을 미리 걸지 않고, 충돌이 생기면 그때 에러를 냅니다.
+이것이 **낙관적 잠금(Optimistic Locking)** 입니다. 잠금을 미리 걸지 않고, 충돌이 생기면 그때 에러를 냅니다.
 
 충돌 감지를 활성화하려면 `MergeFromWithOptimisticLock`을 사용합니다:
 
@@ -485,6 +518,8 @@ if err := r.Patch(ctx, obj, patch); err != nil {
 }
 ```
 
+<br>
+
 ### 8. Status 서브리소스 — 왜 분리되어 있나
 
 K8s API 레벨에서 `spec`과 `status`는 **완전히 분리된 엔드포인트**입니다.
@@ -497,6 +532,8 @@ K8s API 레벨에서 `spec`과 `status`는 **완전히 분리된 엔드포인트
 spec 변경 가능              spec 변경 불가
 status 변경 무시            status만 변경 가능
 ```
+
+<br>
 
 분리하는 이유:
 
@@ -522,23 +559,26 @@ if err := r.Status().Update(ctx, myApp); err != nil {
 | | `Update()` | `Patch()` | `Status().Update()` |
 |---|---|---|---|
 | 대상 | spec 전체 | 변경된 부분만 | status만 |
-| 필드 유실 위험 | ⚠️ 있음 | 없음 | 없음 |
-| Get() 선행 필요 | ✅ 필수 | ✅ 필수 | ✅ 필수 |
+| 필드 유실 위험 | 있음 | 없음 | 없음 |
+| Get() 선행 필요 |  필수 |  필수 |  필수 |
 | 주요 사용처 | Finalizer 추가 등 | spec 부분 수정 | 컨트롤러 상태 보고 |
 
 ---
+
+<br>
+<br>
 
 ## Ownership 설정 (OwnerReference)
 
 ### 1. OwnerReference가 왜 필요한가
 
-OwnerReference 없이 컨트롤러가 하위 리소스를 만들면 다음과 같은 문제가 생깁니다:
+OwnerReference 없이 컨트롤러가 하위 리소스를 만들면 다음과 같은 문제가 생깁니다.
 
 ```
 MyApp CR 삭제
       │
       ▼
-MyApp은 사라졌지만...
+MyApp은 사라졌지만..
 
 Deployment ← 아직 살아있음 (고아 리소스)
 Service    ← 아직 살아있음 (고아 리소스)
@@ -553,10 +593,12 @@ MyApp CR 삭제
       ▼
 K8s Garbage Collector가 자동으로
 
-Deployment ← 함께 삭제 ✅
-Service    ← 함께 삭제 ✅
-ConfigMap  ← 함께 삭제 ✅
+Deployment ← 함께 삭제 
+Service    ← 함께 삭제 
+ConfigMap  ← 함께 삭제 
 ```
+
+<br>
 
 ### 2. `SetControllerReference` — 핵심 함수
 
@@ -570,6 +612,8 @@ func SetControllerReference(
     opts       ...OwnerReferenceOption,
 ) error
 ```
+
+<br>
 
 실제 사용 패턴:
 
@@ -611,6 +655,8 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 
 > ⚠️ `SetControllerReference`는 반드시 `Create` / `CreateOrUpdate` **전에** 호출해야 합니다. OwnerReference가 오브젝트에 심어진 채로 생성되어야 하기 때문입니다.
 
+<br>
+
 ### 3. `SetControllerReference` vs `SetOwnerReference`
 
 `SetOwnerReference`는 owner를 controller로 지정하지 않고도 해당 오브젝트에 의존성을 가진다고 선언할 수 있습니다. 동일한 오브젝트에 대한 참조가 이미 존재하면 새로 제공된 버전으로 덮어씌워집니다.
@@ -619,9 +665,11 @@ func (r *MyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 |---|---|---|
 | controller 플래그 | `true` | `false` |
 | 하나의 오브젝트에 | **1개만** 가능 | 여러 개 가능 |
-| Garbage Collection | ✅ 트리거 | ✅ 트리거 |
-| Reconcile 트리거 | ✅ (변경 시 부모 Reconcile) | ❌ |
+| Garbage Collection |  트리거 |  트리거 |
+| Reconcile 트리거 |  (변경 시 부모 Reconcile) | ❌ |
 | 주 사용처 | 컨트롤러가 직접 관리하는 하위 리소스 | 단순 소유권 표시 |
+
+<br>
 
 ### 4. `AlreadyOwnedError` — 반드시 처리해야 할 에러
 
@@ -637,6 +685,8 @@ if err := controllerutil.SetControllerReference(myApp, deploy, r.Scheme); err !=
     return ctrl.Result{}, err
 }
 ```
+
+<br>
 
 ### 5. `WithBlockOwnerDeletion` 옵션
 
@@ -664,7 +714,9 @@ Deployment 백그라운드 삭제            Deployment 삭제 완료 후
                                       MyApp 삭제 완료
 ```
 
-### 6. 전체 Reconcile 흐름 — 완성본
+<br>
+
+### 6. 전체 Reconcile 흐름 
 
 ```
 Reconcile 시작
@@ -694,25 +746,37 @@ Reconcile 시작
 
 ---
 
+<br>
+<br>
+
 ## Week 4 전체 내용 연결 정리
 
 ```
 Reconcile 함수 구조
     ↓  (멱등성 원칙 + Request는 이름만 담음 + WorkQueue 중복 제거)
+
 리소스 조회 (Get)
     ↓  (IsNotFound 분기 처리 필수 + 캐시에서 읽음)
+
 리소스 생성 (Create / CreateOrUpdate)
     ↓  (Create 직후 Get 금지 + MutateFn으로 desired state 정의)
+
 리소스 업데이트 (Update / Patch)
     ↓  (Update = 전체 덮어씀, Patch = diff만 전송, ResourceVersion 충돌 주의)
+
 Status 업데이트
     ↓  (반드시 r.Status().Update() 사용 — 일반 Update로는 무시됨)
+
 OwnerReference 설정
     ↓  (SetControllerReference → GC + Reconcile 트리거)
+
 부모 삭제 → 자식 자동 GC ✅
 ```
 
 ---
+<br>
+<br>
+<br>
 
 ## References
 
