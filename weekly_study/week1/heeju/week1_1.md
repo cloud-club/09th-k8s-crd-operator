@@ -1,7 +1,7 @@
 # 개발 환경 구성 — Go · Docker · Kubernetes
 
-> Go 기반 Kubernetes Operator 개발에 필요한 도구들을 처음부터 설치하고 설정하는 과정을 정리합니다.
-> 로컬 머신에서 실제 Kubernetes 클러스터처럼 개발·테스트할 수 있는 환경을 목표로 합니다.
+> - Go 기반 Kubernetes Operator 개발에 필요한 도구들을 처음부터 설치하고 설정하는 과정을 정리합니다.
+> - 로컬 머신에서 실제 Kubernetes 클러스터처럼 개발·테스트할 수 있는 환경을 목표로 합니다.
 
 ## 목차
 
