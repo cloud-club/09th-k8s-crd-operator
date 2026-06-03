@@ -1,5 +1,3 @@
-# Operator 고도화
-
 ## 1. Status 고도화
 
 Kubernetes에서 리소스는 크게 `spec`과 `status`로 나누어 관리된다.
