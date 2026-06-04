@@ -1002,20 +1002,24 @@ Reconcile 함수에서는 보통 다음 순서로 status를 업데이트한다.
 
 ```go
 func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    // MyApp Custom Resource 조회
     myApp := &appv1.MyApp{}
 
     if err := r.Get(ctx, req.NamespacedName, myApp); err != nil {
         return ctrl.Result{}, client.IgnoreNotFound(err)
     }
 
+    // 기존 status와 비교하기 위해 원본 객체 복사
     original := myApp.DeepCopy()
 
+    // MyApp이 관리하는 Deployment 조회
     deploy := &appsv1.Deployment{}
     err := r.Get(ctx, types.NamespacedName{
         Name:      myApp.Name,
         Namespace: myApp.Namespace,
     }, deploy)
 
+    // Deployment가 없거나 조회되지 않은 경우 Ready=False로 기록
     if err != nil {
         myApp.Status.ObservedGeneration = myApp.Generation
 
@@ -1030,9 +1034,11 @@ func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
         return r.updateStatusIfChanged(ctx, original, myApp)
     }
 
+    // Deployment 상태를 MyApp status에 반영
     myApp.Status.ObservedGeneration = myApp.Generation
     myApp.Status.ReadyReplicas = deploy.Status.ReadyReplicas
 
+    // 원하는 replica 수와 실제 ready replica 수가 같으면 Ready=True로 기록
     if deploy.Status.ReadyReplicas == myApp.Spec.Replicas {
         setCondition(&myApp.Status.Conditions, metav1.Condition{
             Type:               "Ready",
@@ -1043,6 +1049,7 @@ func (r *MyAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
         })
     }
 
+    // status가 변경된 경우에만 업데이트
     return r.updateStatusIfChanged(ctx, original, myApp)
 }
 ```
@@ -1055,16 +1062,20 @@ func (r *MyAppReconciler) updateStatusIfChanged(
     original *appv1.MyApp,
     current *appv1.MyApp,
 ) (ctrl.Result, error) {
+    // 기존 status와 현재 계산된 status가 같으면 업데이트하지 않음
     if reflect.DeepEqual(original.Status, current.Status) {
         return ctrl.Result{}, nil
     }
 
+    // 기존 객체를 기준으로 변경된 부분만 Patch하기 위한 객체 생성
     patch := client.MergeFrom(original)
 
+    // status subresource만 Patch하여 spec은 건드리지 않고 status만 업데이트
     if err := r.Status().Patch(ctx, current, patch); err != nil {
         return ctrl.Result{}, err
     }
 
+    // status 업데이트 완료 후 Reconcile 종료
     return ctrl.Result{}, nil
 }
 ```
