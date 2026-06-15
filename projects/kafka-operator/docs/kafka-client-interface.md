@@ -1,7 +1,10 @@
-# KafkaClient 인터페이스 설계 합의서
+# Kafka Client 인터페이스 설계 합의서
 
 > 담당자 1(Kafka 클라이언트)과 담당자 2(K8s 오퍼레이터)가 독립적으로 개발하기 위한 사전 합의 문서.
 > 스캐폴딩 이후 `internal/kafka/interface.go`가 source of truth가 되고, 이 문서는 rationale로 남는다.
+>
+> **네이밍 노트**: 인터페이스 이름은 Go 컨벤션(`kafka.Client` 로 호출 시 stutter 회피)에 따라 **`Client`** 로 한다.
+> 패키지 외부에서는 `kafka.Client`, 패키지 내부에서는 `Client`. 이전 초안의 `KafkaClient`는 이 이름으로 통일.
 
 ---
 
@@ -22,9 +25,9 @@ package kafka
 
 import "context"
 
-// KafkaClient는 Kafka Admin API에 대한 도메인 추상화.
+// Client는 Kafka Admin API에 대한 도메인 추상화.
 // 멱등성/재시도는 호출자(controller)가 결정한다.
-type KafkaClient interface {
+type Client interface {
     // DescribeTopic은 토픽의 현재 상태를 조회한다.
     // 토픽이 없으면 ErrTopicNotFound 를 반환한다.
     DescribeTopic(ctx context.Context, name string) (*TopicInfo, error)
@@ -198,7 +201,7 @@ func (r *KafkaTopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 ## 7. 동시성 / 안전성
 
-- `KafkaClient` 구현체는 **goroutine-safe** 해야 한다. controller-runtime 은 동일 GVK에 대해 단일 worker가 기본이지만, MaxConcurrentReconciles 를 늘릴 가능성을 열어둔다.
+- `kafka.Client` 구현체는 **goroutine-safe** 해야 한다. controller-runtime 은 동일 GVK에 대해 단일 worker가 기본이지만, MaxConcurrentReconciles 를 늘릴 가능성을 열어둔다.
 - 내부적으로 admin client connection pool을 재사용한다 (매 호출마다 새 연결 X).
 
 ---
@@ -217,21 +220,23 @@ func (r *KafkaTopicReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 **Controller scope 제한**: controller-runtime 의 `cache.Options{DefaultNamespaces: {"team-2": {}}}` 로 watch 범위를 `team-2`에 한정한다. 다른 팀이 실수로 같은 CRD를 사용해도 우리 operator는 반응하지 않는다.
 
-**KafkaClient 자체는 namespace 개념을 모른다.** 외부 Kafka admin API와만 통신하며, namespace 분리는 controller 레이어의 책임이다. 따라서 이 인터페이스 자체는 공유 클러스터 규칙의 영향을 받지 않는다.
+**`kafka.Client` 자체는 namespace 개념을 모른다.** 외부 Kafka admin API와만 통신하며, namespace 분리는 controller 레이어의 책임이다. 따라서 이 인터페이스 자체는 공유 클러스터 규칙의 영향을 받지 않는다.
 
 ---
 
 ## 8. 테스트 전략
 
 - 담당자 1: 실제 Kafka(docker-compose)로 통합 테스트 — 각 메서드의 happy path + 에러 케이스.
-- 담당자 2: `internal/kafka/fake` 패키지에 in-memory `FakeClient` 구현 → controller 단위 테스트에서 사용.
-- 통합 테스트는 1주차 후반에 mock → 실 client 교체로 검증.
+- 담당자 2: `internal/kafka/fake` 패키지에 in-memory `fake.Client` 구현 → controller 단위 테스트에서 사용. (현재 커밋됨)
+- 통합 테스트는 1주차 후반에 fake → 실 client 교체로 검증.
 
 ```go
-// 담당자 2가 사용할 fake 예시
-type FakeClient struct {
+// internal/kafka/fake/fake.go (호출 시 fake.Client / fake.New())
+package fake
+
+type Client struct {
     mu     sync.Mutex
-    topics map[string]*TopicInfo
+    topics map[string]*kafka.TopicInfo
 }
 ```
 
@@ -255,3 +260,4 @@ type FakeClient struct {
 
 - 2026-06-15: 초안 작성 (1주차 시작 전 합의용)
 - 2026-06-15: 공유 클러스터 규칙(`rule.md`) 반영 — 배포/운영 컨텍스트 섹션 추가, 브로커 접속 정보 오픈 이슈에 `team-2` namespace 제약 명시
+- 2026-06-15: 인터페이스 명을 `KafkaClient` → `Client` 로 통일 (Go 컨벤션, `kafka.Client` 호출 시 stutter 회피). fake 구현 커밋 (`internal/kafka/fake/fake.go`).
