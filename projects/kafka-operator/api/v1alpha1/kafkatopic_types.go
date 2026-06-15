@@ -20,48 +20,66 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
-// KafkaTopicSpec defines the desired state of KafkaTopic
+// KafkaTopicSpec defines the desired state of KafkaTopic.
 type KafkaTopicSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// TopicName is the actual topic name in Kafka.
+	// Must match Kafka's naming rules: 1-249 chars of [a-zA-Z0-9._-]. Immutable.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=249
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._-]+$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topicName is immutable"
+	// +required
+	TopicName string `json:"topicName"`
 
-	// foo is an example field of KafkaTopic. Edit kafkatopic_types.go to remove/update
+	// Partitions is the desired partition count.
+	// Kafka does not allow partition decrease; the controller surfaces such
+	// attempts via the Ready=False / PartitionDecreaseNotAllowed condition
+	// rather than rejecting them at admission.
+	// +kubebuilder:validation:Minimum=1
+	// +required
+	Partitions int32 `json:"partitions"`
+
+	// ReplicationFactor is the number of broker replicas per partition. Immutable.
+	// Changing the replication factor requires kafka-reassign-partitions and is out of scope.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="replicationFactor is immutable"
+	// +required
+	ReplicationFactor int16 `json:"replicationFactor"`
+
+	// Config holds topic-level Kafka configuration overrides (e.g. retention.ms).
+	// Only keys present here are managed by the operator; absent keys keep Kafka defaults.
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // KafkaTopicStatus defines the observed state of KafkaTopic.
 type KafkaTopicStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the KafkaTopic resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Conditions represent the latest observations of the KafkaTopic state.
+	// Standard types:
+	//   - Ready: the topic is in sync with Kafka
+	//   - ConfigDrifted: spec.config diverges from the live Kafka config (week 2)
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ObservedGeneration is the .metadata.generation last processed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ObservedPartitions is the partition count observed in Kafka at the last reconcile.
+	// +optional
+	ObservedPartitions int32 `json:"observedPartitions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Topic",type=string,JSONPath=`.spec.topicName`
+// +kubebuilder:printcolumn:name="Partitions",type=integer,JSONPath=`.spec.partitions`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// KafkaTopic is the Schema for the kafkatopics API
+// KafkaTopic is the Schema for the kafkatopics API.
 type KafkaTopic struct {
 	metav1.TypeMeta `json:",inline"`
 
@@ -80,7 +98,7 @@ type KafkaTopic struct {
 
 // +kubebuilder:object:root=true
 
-// KafkaTopicList contains a list of KafkaTopic
+// KafkaTopicList contains a list of KafkaTopic.
 type KafkaTopicList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitzero"`
