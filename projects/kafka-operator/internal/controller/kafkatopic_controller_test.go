@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	kafkav1alpha1 "github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/api/v1alpha1"
+	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/kafka/fake"
 )
 
 var _ = Describe("KafkaTopic Controller", func() {
@@ -51,7 +52,11 @@ var _ = Describe("KafkaTopic Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: kafkav1alpha1.KafkaTopicSpec{
+						TopicName:         "test-topic",
+						Partitions:        3,
+						ReplicationFactor: 1,
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -68,17 +73,20 @@ var _ = Describe("KafkaTopic Controller", func() {
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
+			fakeKafka := fake.New()
 			controllerReconciler := &KafkaTopicReconciler{
 				Client: k8sClient,
 				Scheme: k8sClient.Scheme(),
+				Kafka:  fakeKafka,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			By("Creating the topic in Kafka")
+			Expect(fakeKafka.Names()).To(ContainElement("test-topic"))
 		})
 	})
 })

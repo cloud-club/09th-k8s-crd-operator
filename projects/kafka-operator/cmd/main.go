@@ -29,6 +29,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -37,6 +38,7 @@ import (
 
 	kafkav1alpha1 "github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/api/v1alpha1"
 	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/controller"
+	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/kafka/fake"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -61,7 +63,11 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var watchNamespace string
 	var tlsOpts []func(*tls.Config)
+	flag.StringVar(&watchNamespace, "watch-namespace", "team-2",
+		"Namespace the controller watches for KafkaTopic resources. "+
+			"Defaults to the shared-cluster convention for team-2.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -161,6 +167,14 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "9393e56f.study.dev",
+		// Restrict the controller's cache to a single namespace.
+		// The CRD is cluster-scoped but per docs/cluster-rules.md each team
+		// only manages resources in its own namespace.
+		Cache: cache.Options{
+			DefaultNamespaces: map[string]cache.Config{
+				watchNamespace: {},
+			},
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -178,9 +192,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// TODO: replace fake.New() with the real kafka.Client once internal/kafka/client.go
+	// is implemented (담당자 1 deliverable). For now the in-memory fake lets us
+	// exercise the Reconcile loop without a Kafka broker.
+	kafkaClient := fake.New()
+	setupLog.Info("Using in-memory fake Kafka client", "warning", "topics will not survive restart")
+
 	if err := (&controller.KafkaTopicReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		Kafka:  kafkaClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "kafkatopic")
 		os.Exit(1)
