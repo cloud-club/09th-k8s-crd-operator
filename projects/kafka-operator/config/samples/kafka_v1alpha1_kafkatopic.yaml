@@ -6,4 +6,6 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: kafkatopic-sample
 spec:
-  # TODO(user): Add fields here
+  topicName: "test-topic"
+  partitions: 3
+  replicationFactor: 1
