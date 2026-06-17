@@ -1,0 +1,314 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: canaryreleases.deploy.canary.com
+spec:
+  group: deploy.canary.com
+  names:
+    kind: CanaryRelease
+    listKind: CanaryReleaseList
+    plural: canaryreleases
+    shortNames:
+    - canary
+    singular: canaryrelease
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.currentStepIndex
+      name: Step
+      type: integer
+    - jsonPath: .status.currentWeight
+      name: Weight
+      type: integer
+    - jsonPath: .status.stableReplicas
+      name: Stable
+      type: integer
+    - jsonPath: .status.canaryReplicas
+      name: Canary
+      type: integer
+    - jsonPath: .spec.autoPromotion
+      name: AutoPromotion
+      type: boolean
+    - jsonPath: .spec.image
+      name: Image
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CanaryReleaseSpec defines the desired state of CanaryRelease.
+            properties:
+              autoPromotion:
+                default: true
+                description: canary가 정상일 때 다음 단계로 자동 진행할지 여부
+                type: boolean
+              failurePolicy:
+                description: 실패, rollback, 삭제 시 정리 정책
+                properties:
+                  action:
+                    allOf:
+                    - enum:
+                      - Rollback
+                      - Pause
+                    - enum:
+                      - Rollback
+                      - Pause
+                    default: Rollback
+                    description: |-
+                      실패 시 동작
+                      Rollback: stable 상태로 되돌림 / Pause: 멈추고 사람이 판단
+                    type: string
+                  deleteCanaryOnDelete:
+                    default: true
+                    description: CanaryRelease 삭제 시 canary Deployment를 삭제할지 여부
+                    type: boolean
+                  deleteCanaryOnRollback:
+                    default: false
+                    description: rollback 시 canary Deployment 자체를 삭제할지 여부
+                    type: boolean
+                  restoreStableReplicas:
+                    default: true
+                    description: rollback 시 stable replica를 원래 비율로 복구할지 여부
+                    type: boolean
+                  scaleCanaryToZero:
+                    default: true
+                    description: rollback 시 canary Deployment를 0개로 줄일지 여부
+                    type: boolean
+                type: object
+              healthCheck:
+                description: canary 정상/비정상 판단 기준
+                properties:
+                  checkIntervalSeconds:
+                    default: 10
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  failureThreshold:
+                    default: 3
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  maxUnavailableCanary:
+                    default: 0
+                    description: 허용 가능한 canary unavailable Pod 수
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  podRestartThreshold:
+                    default: 1
+                    description: |-
+                      canary Pod 재시작 횟수가 이 값 이상이면 실패로 본다.
+                      0이면 재시작 횟수 기반 판단을 사용하지 않는다.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              image:
+                description: 배포할 새 버전 canary 컨테이너 이미지
+                minLength: 1
+                type: string
+              interval:
+                default: 30s
+                description: 다음 단계로 넘어가기 전 대기 시간. 예) "30s", "2m"
+                type: string
+              port:
+                default: 8080
+                description: 앱이 listen 하는 컨테이너 포트
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              serviceRef:
+                description: stable Pod와 canary Pod를 함께 바라볼 Service를 가리킨다.
+                properties:
+                  name:
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              stableRef:
+                description: 기존 stable Deployment를 가리킨다.
+                properties:
+                  apiVersion:
+                    default: apps/v1
+                    type: string
+                  kind:
+                    default: Deployment
+                    type: string
+                  name:
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              steps:
+                description: |-
+                  canary 비중을 단계적으로 올리는 설정
+                  예) [{weight: 10}, {weight: 30}, {weight: 60}, {weight: 100}]
+                items:
+                  description: CanaryStep은 canary 비율 한 단계를 의미한다.
+                  properties:
+                    weight:
+                      description: 해당 단계의 canary 비율
+                      format: int32
+                      maximum: 100
+                      minimum: 1
+                      type: integer
+                  required:
+                  - weight
+                  type: object
+                minItems: 1
+                type: array
+              totalReplicas:
+                default: 10
+                description: |-
+                  stable + canary의 총 replica 수
+                  예) totalReplicas=10, weight=30 → canary 3 / stable 7
+                format: int32
+                maximum: 50
+                minimum: 1
+                type: integer
+            required:
+            - image
+            - serviceRef
+            - stableRef
+            - steps
+            type: object
+          status:
+            description: CanaryReleaseStatus defines the observed state of CanaryRelease.
+            properties:
+              canaryReplicas:
+                description: 현재 canary Deployment replica 수
+                format: int32
+                type: integer
+              conditions:
+                description: 다축 상태 정보 (Progressing, Promoted, Degraded 등)
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              currentStepIndex:
+                description: 현재 진행 중인 steps의 인덱스
+                format: int32
+                type: integer
+              currentWeight:
+                description: 현재 canary 비율
+                format: int32
+                type: integer
+              lastStepTime:
+                description: 마지막 단계 전이 시각
+                format: date-time
+                type: string
+              message:
+                description: 사람이 읽을 수 있는 현재 상태 메시지
+                type: string
+              observedGeneration:
+                description: 마지막으로 Reconcile이 반영한 metadata.generation
+                format: int64
+                type: integer
+              phase:
+                description: 현재 상태 머신 단계
+                enum:
+                - Pending
+                - Progressing
+                - Promoting
+                - Promoted
+                - RollingBack
+                - RolledBack
+                - Degraded
+                type: string
+              stableImage:
+                description: 현재 stable Deployment가 실행 중인 이미지
+                type: string
+              stableReplicas:
+                description: 현재 stable Deployment replica 수
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
