@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- deploy_v1alpha1_canaryrelease.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
