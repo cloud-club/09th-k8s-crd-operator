@@ -63,7 +63,16 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --kafka-bootstrap=$(KAFKA_BOOTSTRAP)
+        env:
+          - name: KAFKA_BOOTSTRAP
+            valueFrom:
+              configMapKeyRef:
+                name: config
+                key: bootstrap
         image: controller:latest
+        # kind 에 직접 로드한 로컬 이미지를 쓰므로 레지스트리 pull 을 막는다.
+        imagePullPolicy: IfNotPresent
         name: manager
         ports:
         - containerPort: 8081

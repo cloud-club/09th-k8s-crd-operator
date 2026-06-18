@@ -20,6 +20,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -38,6 +39,7 @@ import (
 
 	kafkav1alpha1 "github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/api/v1alpha1"
 	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/controller"
+	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/kafka"
 	"github.com/cloud-club/09th-k8s-crd-operator/projects/kafka-operator/internal/kafka/fake"
 	// +kubebuilder:scaffold:imports
 )
@@ -64,10 +66,13 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var watchNamespace string
+	var kafkaBootstrap string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&watchNamespace, "watch-namespace", "team-2",
 		"Namespace the controller watches for KafkaTopic resources. "+
 			"Defaults to the shared-cluster convention for team-2.")
+	flag.StringVar(&kafkaBootstrap, "kafka-bootstrap", "localhost:9092",
+		"Comma-separated Kafka bootstrap servers. Set to empty to use the in-memory fake client.")
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -192,11 +197,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO: replace fake.New() with the real kafka.Client once internal/kafka/client.go
-	// is implemented (담당자 1 deliverable). For now the in-memory fake lets us
-	// exercise the Reconcile loop without a Kafka broker.
-	kafkaClient := fake.New()
-	setupLog.Info("Using in-memory fake Kafka client", "warning", "topics will not survive restart")
+	// import 추가: "strings" 및 internal/kafka 패키지
+	var kafkaClient kafka.Client
+	if kafkaBootstrap == "" {
+		kafkaClient = fake.New()
+		setupLog.Info("Using in-memory fake Kafka client", "warning", "topics will not survive restart")
+	} else {
+		realClient, err := kafka.NewClient(strings.Split(kafkaBootstrap, ","))
+		if err != nil {
+			setupLog.Error(err, "Failed to create Kafka client")
+			os.Exit(1)
+		}
+		defer realClient.Close()
+		kafkaClient = realClient
+		setupLog.Info("Using real Kafka client", "bootstrap", kafkaBootstrap)
+	}
 
 	if err := (&controller.KafkaTopicReconciler{
 		Client: mgr.GetClient(),
