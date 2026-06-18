@@ -1,0 +1,10 @@
+apiVersion: database.study.dev/v1
+kind: MySQLInstance
+metadata:
+  name: my-mysql
+  namespace: team-1
+spec:
+  version: "8.0"
+  replicas: 1
+  storageSize: "1Gi"
+  rootPasswordSecret: mysql-root-secret
