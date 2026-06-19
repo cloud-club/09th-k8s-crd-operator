@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- cron_v1_cronjobschedule.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

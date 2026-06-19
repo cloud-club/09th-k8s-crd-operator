@@ -1,0 +1,32 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - cron.example.com
+  resources:
+  - cronjobschedules
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - cron.example.com
+  resources:
+  - cronjobschedules/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - cron.example.com
+  resources:
+  - cronjobschedules/status
+  verbs:
+  - get
+  - patch
+  - update
