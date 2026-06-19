@@ -1,0 +1,23 @@
+apiVersion: observability.example.com/v1
+kind: ObservabilityApp
+metadata:
+  name: sample-observability-app
+  namespace: team-4
+  labels:
+    app.kubernetes.io/name: observability-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  targetRef:
+    kind: Deployment
+    name: sample-app
+  metrics:
+    enabled: true
+    path: /metrics
+    port: http
+  logs:
+    enabled: true
+  dashboard:
+    enabled: true
+  traces:
+    enabled: false
+  mode: basic
