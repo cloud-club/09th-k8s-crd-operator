@@ -1,4 +1,8 @@
 ## Append samples of your project ##
 resources:
-- deploy_v1alpha1_canaryrelease.yaml
+- namespace.yaml
+- stable-configmap.yaml
+- canary-configmap.yaml
+- stable-deployment.yaml
+- stable-service.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

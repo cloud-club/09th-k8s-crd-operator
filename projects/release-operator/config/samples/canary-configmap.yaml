@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: canary-html
+  namespace: team-5
+data:
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head><title>Demo App</title></head>
+    <body>
+      <h1>Canary v1.27</h1>
+      <p>This is the canary version.</p>
+    </body>
+    </html>
