@@ -67,6 +67,11 @@ func getNextScheduleTime(schedule string, last *metav1.Time) (time.Time, error) 
 	return sched.Next(from), nil
 }
 
+// generateRunID는 CronJobSchedule 이름과 Unix timestamp를 조합해 유일한 run ID를 생성한다.
+func generateRunID(name string) string {
+	return fmt.Sprintf("%s-%d", name, time.Now().Unix())
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *CronJobScheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
