@@ -67,6 +67,19 @@ func getNextScheduleTime(schedule string, last *metav1.Time) (time.Time, error) 
 	return sched.Next(from), nil
 }
 
+// trimHistory는 ExecutionHistory를 historyLimit 개수만큼만 유지한다.
+// 오래된 것부터 제거하고, Job은 OwnerReference GC에 맡긴다.
+func trimHistory(cjs *cronv1.CronJobSchedule) {
+	limit := cjs.Spec.HistoryLimit
+	if limit <= 0 {
+		limit = 5
+	}
+	history := cjs.Status.ExecutionHistory
+	if int32(len(history)) > limit {
+		cjs.Status.ExecutionHistory = history[int32(len(history))-limit:]
+	}
+}
+
 // generateRunID는 CronJobSchedule 이름과 Unix timestamp를 조합해 유일한 run ID를 생성한다.
 func generateRunID(name string) string {
 	return fmt.Sprintf("%s-%d", name, time.Now().Unix())
