@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +37,7 @@ type CronJobScheduleReconciler struct {
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules/finalizers,verbs=update
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -58,6 +60,7 @@ func (r *CronJobScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *CronJobScheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cronv1.CronJobSchedule{}).
+		Owns(&batchv1.Job{}).
 		Named("cronjobschedule").
 		Complete(r)
 }
