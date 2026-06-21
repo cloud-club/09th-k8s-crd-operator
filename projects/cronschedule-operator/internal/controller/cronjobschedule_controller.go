@@ -25,6 +25,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -100,6 +101,11 @@ func (r *CronJobScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: time.Until(next)}, nil
+		case cronv1.ReplaceConcurrent:
+			log.Info("replacing active runs", "activeRuns", cjs.Status.ActiveRuns)
+			if err := r.cancelActiveRuns(ctx, cjs); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 	}
 
@@ -160,6 +166,32 @@ func trimHistory(cjs *cronv1.CronJobSchedule) {
 // generateRunID는 CronJobSchedule 이름과 Unix timestamp를 조합해 유일한 run ID를 생성한다.
 func generateRunID(name string) string {
 	return fmt.Sprintf("%s-%d", name, time.Now().Unix())
+}
+
+// cancelActiveRuns는 Replace 정책일 때 실행 중인 run들의 Job을 전부 삭제하고 Failed로 표시한다.
+func (r *CronJobScheduleReconciler) cancelActiveRuns(ctx context.Context, cjs *cronv1.CronJobSchedule) error {
+	for i := range cjs.Status.ExecutionHistory {
+		record := &cjs.Status.ExecutionHistory[i]
+		if record.Phase != "Running" {
+			continue
+		}
+		for j := range record.TaskStatuses {
+			ts := &record.TaskStatuses[j]
+			if ts.Phase == "Running" && ts.JobName != "" {
+				job := &batchv1.Job{}
+				if err := r.Get(ctx, types.NamespacedName{Name: ts.JobName, Namespace: cjs.Namespace}, job); err == nil {
+					if err := r.Delete(ctx, job); client.IgnoreNotFound(err) != nil {
+						return err
+					}
+				}
+				ts.Phase = "Failed"
+			}
+		}
+		now := metav1.Now()
+		record.Phase = "Failed"
+		record.CompletionTime = &now
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
