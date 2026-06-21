@@ -18,8 +18,12 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	"github.com/robfig/cron/v3"
 	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,21 +43,28 @@ type CronJobScheduleReconciler struct {
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the CronJobSchedule object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *CronJobScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	// TODO: your logic here
 
 	return ctrl.Result{}, nil
+}
+
+// getNextScheduleTime은 cron 표현식과 마지막 실행 시각을 받아 다음 실행 시각을 반환한다.
+// lastScheduleTime이 nil이면(한 번도 실행 안 됨) 1시간 전부터 계산해서
+// Operator 시작 직후 즉시 첫 실행이 트리거되도록 한다.
+func getNextScheduleTime(schedule string, last *metav1.Time) (time.Time, error) {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	sched, err := parser.Parse(schedule)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("cron 표현식 파싱 실패: %w", err)
+	}
+	from := time.Now().Add(-time.Hour)
+	if last != nil {
+		from = last.Time
+	}
+	return sched.Next(from), nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
