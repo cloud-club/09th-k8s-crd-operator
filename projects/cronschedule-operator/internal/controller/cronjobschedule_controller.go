@@ -44,11 +44,88 @@ type CronJobScheduleReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 func (r *CronJobScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO: your logic here
+	// 1. CR 조회
+	cjs := &cronv1.CronJobSchedule{}
+	if err := r.Get(ctx, req.NamespacedName, cjs); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	// 2. 진행 중인 run들 상태 갱신
+	if err := r.syncActiveRuns(ctx, cjs); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// 3. activeRuns 카운트 갱신
+	activeCount := int32(0)
+	for _, record := range cjs.Status.ExecutionHistory {
+		if record.Phase == "Running" {
+			activeCount++
+		}
+	}
+	cjs.Status.ActiveRuns = activeCount
+
+	// 4. lastSuccessTime 갱신
+	for _, record := range cjs.Status.ExecutionHistory {
+		if record.Phase == "Succeeded" && record.CompletionTime != nil {
+			if cjs.Status.LastSuccessTime == nil || record.CompletionTime.After(cjs.Status.LastSuccessTime.Time) {
+				cjs.Status.LastSuccessTime = record.CompletionTime
+			}
+		}
+	}
+
+	// 5. 다음 실행 시각 계산
+	nextTime, err := getNextScheduleTime(cjs.Spec.Schedule, cjs.Status.LastScheduleTime)
+	if err != nil {
+		log.Error(err, "invalid cron schedule", "schedule", cjs.Spec.Schedule)
+		return ctrl.Result{}, err
+	}
+
+	// 6. 아직 실행 시각이 아니면 대기
+	if time.Now().Before(nextTime) {
+		if err := r.Status().Update(ctx, cjs); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Until(nextTime)}, nil
+	}
+
+	// 7. ConcurrencyPolicy 체크
+	if cjs.Status.ActiveRuns > 0 {
+		switch cjs.Spec.ConcurrencyPolicy {
+		case cronv1.ForbidConcurrent:
+			log.Info("skipping new run: previous run still active", "activeRuns", cjs.Status.ActiveRuns)
+			next, _ := getNextScheduleTime(cjs.Spec.Schedule, &metav1.Time{Time: nextTime})
+			if err := r.Status().Update(ctx, cjs); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: time.Until(next)}, nil
+		}
+	}
+
+	// 8. 새 run 시작
+	runID := generateRunID(cjs.Name)
+	log.Info("triggering new run", "runID", runID)
+
+	if err := r.executeDag(ctx, cjs, runID); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// 9. lastScheduleTime 기록
+	now := metav1.Now()
+	cjs.Status.LastScheduleTime = &now
+
+	// 10. 이력 정리
+	trimHistory(cjs)
+
+	// 11. Status 업데이트
+	if err := r.Status().Update(ctx, cjs); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// 12. 다음 실행까지 대기
+	next, _ := getNextScheduleTime(cjs.Spec.Schedule, &now)
+	return ctrl.Result{RequeueAfter: time.Until(next)}, nil
 }
 
 // getNextScheduleTime은 cron 표현식과 마지막 실행 시각을 받아 다음 실행 시각을 반환한다.
