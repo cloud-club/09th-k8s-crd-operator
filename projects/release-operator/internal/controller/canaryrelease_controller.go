@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -47,9 +48,23 @@ type CanaryReleaseReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.21.0/pkg/reconcile
 func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var canaryRelease deployv1alpha1.CanaryRelease
+	if err := r.Get(ctx, req.NamespacedName, &canaryRelease); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, err
+	}
+
+	applyDefaults(&canaryRelease)
+
+	log.Info("reconciling CanaryRelease",
+		"name", canaryRelease.Name,
+		"namespace", canaryRelease.Namespace,
+		"generation", canaryRelease.Generation,
+	)
 
 	return ctrl.Result{}, nil
 }
