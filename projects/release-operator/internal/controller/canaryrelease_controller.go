@@ -79,6 +79,8 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
 			setPhase(&canaryRelease, deployv1alpha1.PhasePending)
 			setMessage(&canaryRelease, "waiting for stableRef.name")
+			setCondition(&canaryRelease, ConditionProgressing, metav1.ConditionFalse, "WaitingForStableRef", "stableRef.name is required")
+			setCondition(&canaryRelease, ConditionPromoted, metav1.ConditionFalse, "NotPromoted", "canary release has not been promoted")
 			setObservedGeneration(&canaryRelease)
 		})
 		return ctrl.Result{}, statusErr
@@ -92,7 +94,10 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if apierrors.IsNotFound(err) {
 			statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
 				setPhase(&canaryRelease, deployv1alpha1.PhasePending)
-				setMessage(&canaryRelease, fmt.Sprintf("waiting for stable Deployment %q", canaryRelease.Spec.StableRef.Name))
+				msg := fmt.Sprintf("waiting for stable Deployment %q", canaryRelease.Spec.StableRef.Name)
+				setMessage(&canaryRelease, msg)
+				setCondition(&canaryRelease, ConditionProgressing, metav1.ConditionFalse, "WaitingForStableDeployment", msg)
+				setCondition(&canaryRelease, ConditionPromoted, metav1.ConditionFalse, "NotPromoted", "canary release has not been promoted")
 				setObservedGeneration(&canaryRelease)
 			})
 			return ctrl.Result{}, statusErr
@@ -109,6 +114,8 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
 			setPhase(&canaryRelease, deployv1alpha1.PhasePending)
 			setMessage(&canaryRelease, "waiting for at least one canary step")
+			setCondition(&canaryRelease, ConditionProgressing, metav1.ConditionFalse, "WaitingForCanaryStep", "at least one canary step is required")
+			setCondition(&canaryRelease, ConditionPromoted, metav1.ConditionFalse, "NotPromoted", "canary release has not been promoted")
 			setObservedGeneration(&canaryRelease)
 		})
 		return ctrl.Result{}, statusErr
@@ -122,15 +129,21 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if err := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
+		msg := stepMessage(&canaryRelease, stepIndex, weight, requeueAfter)
 		if isLastStep(&canaryRelease, stepIndex) {
 			setPhase(&canaryRelease, deployv1alpha1.PhasePromoted)
+			setCondition(&canaryRelease, ConditionProgressing, metav1.ConditionFalse, "PromotionComplete", msg)
+			setCondition(&canaryRelease, ConditionPromoted, metav1.ConditionTrue, "PromotionComplete", msg)
 		} else {
 			setPhase(&canaryRelease, deployv1alpha1.PhaseProgressing)
+			setCondition(&canaryRelease, ConditionProgressing, metav1.ConditionTrue, "StepApplied", msg)
+			setCondition(&canaryRelease, ConditionPromoted, metav1.ConditionFalse, "PromotionInProgress", msg)
 		}
+		setCondition(&canaryRelease, ConditionDegraded, metav1.ConditionFalse, "HealthCheckPending", "canary health check has not reported a failure")
 		setStepStatusIfNeeded(&canaryRelease, stepIndex, weight)
 		setStableImage(&canaryRelease, firstContainerImage(&stableDeployment))
 		setReplicasStatus(&canaryRelease, stableReplicas, canaryReplicas)
-		setMessage(&canaryRelease, stepMessage(&canaryRelease, stepIndex, weight, requeueAfter))
+		setMessage(&canaryRelease, msg)
 		setObservedGeneration(&canaryRelease)
 	}); err != nil {
 		return ctrl.Result{}, err

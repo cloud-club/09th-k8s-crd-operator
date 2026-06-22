@@ -19,9 +19,16 @@ package controller
 import (
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	deployv1alpha1 "github.com/cloud-club/09th-k8s-crd-operator/projects/release-operator/api/v1alpha1"
+)
+
+const (
+	ConditionProgressing = "Progressing"
+	ConditionPromoted    = "Promoted"
+	ConditionDegraded    = "Degraded"
 )
 
 // setPhase는 CanaryRelease의 status.phase를 갱신한다.
@@ -57,6 +64,16 @@ func setMessage(cr *deployv1alpha1.CanaryRelease, msg string) {
 // Reconcile 완료 시 호출해 "이 spec 세대까지 반영했다"는 것을 표시한다.
 func setObservedGeneration(cr *deployv1alpha1.CanaryRelease) {
 	cr.Status.ObservedGeneration = cr.Generation
+}
+
+func setCondition(cr *deployv1alpha1.CanaryRelease, conditionType string, status metav1.ConditionStatus, reason, message string) {
+	meta.SetStatusCondition(&cr.Status.Conditions, metav1.Condition{
+		Type:               conditionType,
+		Status:             status,
+		ObservedGeneration: cr.Generation,
+		Reason:             reason,
+		Message:            message,
+	})
 }
 
 // applyDefaults는 사용자가 healthCheck / failurePolicy 블록을 생략했을 때
