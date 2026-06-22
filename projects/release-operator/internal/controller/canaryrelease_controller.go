@@ -41,11 +41,16 @@ type CanaryReleaseReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-const canaryReleaseLabel = "canary-release"
+const (
+	canaryReleaseFinalizer = "deploy.canary.com/canaryrelease-finalizer"
+	canaryReleaseLabel     = "canary-release"
+)
 
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -74,6 +79,15 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		"namespace", canaryRelease.Namespace,
 		"generation", canaryRelease.Generation,
 	)
+
+	if !canaryRelease.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.finalizeCanaryRelease(ctx, &canaryRelease)
+	}
+
+	if !controllerutil.ContainsFinalizer(&canaryRelease, canaryReleaseFinalizer) {
+		controllerutil.AddFinalizer(&canaryRelease, canaryReleaseFinalizer)
+		return ctrl.Result{}, r.Update(ctx, &canaryRelease)
+	}
 
 	if canaryRelease.Spec.StableRef.Name == "" {
 		statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
@@ -150,6 +164,35 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *CanaryReleaseReconciler) finalizeCanaryRelease(ctx context.Context, cr *deployv1alpha1.CanaryRelease) error {
+	if !controllerutil.ContainsFinalizer(cr, canaryReleaseFinalizer) {
+		return nil
+	}
+
+	if cr.Spec.FailurePolicy.DeleteCanaryOnDelete {
+		if err := r.deleteCanaryDeployment(ctx, cr); err != nil {
+			return err
+		}
+	}
+
+	controllerutil.RemoveFinalizer(cr, canaryReleaseFinalizer)
+	return r.Update(ctx, cr)
+}
+
+func (r *CanaryReleaseReconciler) deleteCanaryDeployment(ctx context.Context, cr *deployv1alpha1.CanaryRelease) error {
+	var canaryDeployment appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: cr.Namespace,
+		Name:      canaryDeploymentName(cr),
+	}, &canaryDeployment); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, &canaryDeployment))
 }
 
 func (r *CanaryReleaseReconciler) scaleDeployments(ctx context.Context, stable, canary *appsv1.Deployment, stableReplicas, canaryReplicas int32) error {
