@@ -104,17 +104,49 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	if len(canaryRelease.Spec.Steps) == 0 {
+		statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
+			setPhase(&canaryRelease, deployv1alpha1.PhasePending)
+			setMessage(&canaryRelease, "waiting for at least one canary step")
+			setObservedGeneration(&canaryRelease)
+		})
+		return ctrl.Result{}, statusErr
+	}
+
+	stepIndex := currentStepIndex(&canaryRelease)
+	weight := canaryRelease.Spec.Steps[stepIndex].Weight
+	stableReplicas, canaryReplicas := calculateReplicas(canaryRelease.Spec.TotalReplicas, weight)
+	if err := r.scaleDeployments(ctx, &stableDeployment, canaryDeployment, stableReplicas, canaryReplicas); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
 		setPhase(&canaryRelease, deployv1alpha1.PhaseProgressing)
+		setStepStatusIfNeeded(&canaryRelease, stepIndex, weight)
 		setStableImage(&canaryRelease, firstContainerImage(&stableDeployment))
-		setReplicasStatus(&canaryRelease, deploymentReplicas(&stableDeployment), deploymentReplicas(canaryDeployment))
-		setMessage(&canaryRelease, fmt.Sprintf("ensured canary Deployment %q", canaryDeployment.Name))
+		setReplicasStatus(&canaryRelease, stableReplicas, canaryReplicas)
+		setMessage(&canaryRelease, fmt.Sprintf("applied canary weight %d%%", weight))
 		setObservedGeneration(&canaryRelease)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *CanaryReleaseReconciler) scaleDeployments(ctx context.Context, stable, canary *appsv1.Deployment, stableReplicas, canaryReplicas int32) error {
+	if err := r.scaleDeployment(ctx, stable, stableReplicas); err != nil {
+		return err
+	}
+	return r.scaleDeployment(ctx, canary, canaryReplicas)
+}
+
+func (r *CanaryReleaseReconciler) scaleDeployment(ctx context.Context, deployment *appsv1.Deployment, replicas int32) error {
+	if deployment.Spec.Replicas != nil && *deployment.Spec.Replicas == replicas {
+		return nil
+	}
+	deployment.Spec.Replicas = &replicas
+	return r.Update(ctx, deployment)
 }
 
 func (r *CanaryReleaseReconciler) ensureCanaryDeployment(ctx context.Context, cr *deployv1alpha1.CanaryRelease, stable *appsv1.Deployment) (*appsv1.Deployment, error) {
@@ -142,10 +174,6 @@ func (r *CanaryReleaseReconciler) ensureCanaryDeployment(ctx context.Context, cr
 	}
 	if !reflect.DeepEqual(existing.Labels, desired.Labels) {
 		existing.Labels = desired.Labels
-		changed = true
-	}
-	if !reflect.DeepEqual(existing.Spec.Replicas, desired.Spec.Replicas) {
-		existing.Spec.Replicas = desired.Spec.Replicas
 		changed = true
 	}
 	if !reflect.DeepEqual(existing.Spec.Template, desired.Spec.Template) {
@@ -203,6 +231,23 @@ func (r *CanaryReleaseReconciler) updateStatusIfChanged(ctx context.Context, cr 
 		return nil
 	}
 	return r.Status().Update(ctx, cr)
+}
+
+func currentStepIndex(cr *deployv1alpha1.CanaryRelease) int32 {
+	if cr.Status.CurrentStepIndex < 0 {
+		return 0
+	}
+	if int(cr.Status.CurrentStepIndex) >= len(cr.Spec.Steps) {
+		return int32(len(cr.Spec.Steps) - 1)
+	}
+	return cr.Status.CurrentStepIndex
+}
+
+func setStepStatusIfNeeded(cr *deployv1alpha1.CanaryRelease, stepIndex int32, weight int32) {
+	if cr.Status.CurrentStepIndex == stepIndex && cr.Status.CurrentWeight == weight && cr.Status.LastStepTime != nil {
+		return
+	}
+	setStepStatus(cr, stepIndex, weight)
 }
 
 func canaryDeploymentName(cr *deployv1alpha1.CanaryRelease) string {
