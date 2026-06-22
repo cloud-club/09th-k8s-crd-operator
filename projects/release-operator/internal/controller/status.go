@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"time"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	deployv1alpha1 "github.com/cloud-club/09th-k8s-crd-operator/projects/release-operator/api/v1alpha1"
@@ -63,6 +65,16 @@ func setObservedGeneration(cr *deployv1alpha1.CanaryRelease) {
 // kubebuilder default 마커는 블록 자체가 없으면 중첩 필드까지 적용되지 않으므로
 // Reconcile 진입부에서 이 함수를 호출해 보정한다.
 func applyDefaults(cr *deployv1alpha1.CanaryRelease) {
+	if cr.Spec.Port == 0 {
+		cr.Spec.Port = 8080
+	}
+	if cr.Spec.TotalReplicas == 0 {
+		cr.Spec.TotalReplicas = 10
+	}
+	if cr.Spec.Interval.Duration == 0 {
+		cr.Spec.Interval = metav1.Duration{Duration: 30 * time.Second}
+	}
+
 	hc := &cr.Spec.HealthCheck
 	if hc.CheckIntervalSeconds == 0 {
 		hc.CheckIntervalSeconds = 10

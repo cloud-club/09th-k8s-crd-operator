@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -113,7 +114,7 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, statusErr
 	}
 
-	stepIndex := currentStepIndex(&canaryRelease)
+	stepIndex, requeueAfter := nextStep(&canaryRelease, time.Now())
 	weight := canaryRelease.Spec.Steps[stepIndex].Weight
 	stableReplicas, canaryReplicas := calculateReplicas(canaryRelease.Spec.TotalReplicas, weight)
 	if err := r.scaleDeployments(ctx, &stableDeployment, canaryDeployment, stableReplicas, canaryReplicas); err != nil {
@@ -121,17 +122,21 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	if err := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
-		setPhase(&canaryRelease, deployv1alpha1.PhaseProgressing)
+		if isLastStep(&canaryRelease, stepIndex) {
+			setPhase(&canaryRelease, deployv1alpha1.PhasePromoted)
+		} else {
+			setPhase(&canaryRelease, deployv1alpha1.PhaseProgressing)
+		}
 		setStepStatusIfNeeded(&canaryRelease, stepIndex, weight)
 		setStableImage(&canaryRelease, firstContainerImage(&stableDeployment))
 		setReplicasStatus(&canaryRelease, stableReplicas, canaryReplicas)
-		setMessage(&canaryRelease, fmt.Sprintf("applied canary weight %d%%", weight))
+		setMessage(&canaryRelease, stepMessage(&canaryRelease, stepIndex, weight, requeueAfter))
 		setObservedGeneration(&canaryRelease)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
 func (r *CanaryReleaseReconciler) scaleDeployments(ctx context.Context, stable, canary *appsv1.Deployment, stableReplicas, canaryReplicas int32) error {
@@ -243,11 +248,46 @@ func currentStepIndex(cr *deployv1alpha1.CanaryRelease) int32 {
 	return cr.Status.CurrentStepIndex
 }
 
+func nextStep(cr *deployv1alpha1.CanaryRelease, now time.Time) (int32, time.Duration) {
+	stepIndex := currentStepIndex(cr)
+	if !cr.Spec.AutoPromotion || isLastStep(cr, stepIndex) {
+		return stepIndex, 0
+	}
+	if cr.Status.LastStepTime == nil {
+		return stepIndex, cr.Spec.Interval.Duration
+	}
+
+	elapsed := now.Sub(cr.Status.LastStepTime.Time)
+	if elapsed < cr.Spec.Interval.Duration {
+		return stepIndex, cr.Spec.Interval.Duration - elapsed
+	}
+
+	stepIndex++
+	if isLastStep(cr, stepIndex) {
+		return stepIndex, 0
+	}
+	return stepIndex, cr.Spec.Interval.Duration
+}
+
+func isLastStep(cr *deployv1alpha1.CanaryRelease, stepIndex int32) bool {
+	return int(stepIndex) >= len(cr.Spec.Steps)-1
+}
+
 func setStepStatusIfNeeded(cr *deployv1alpha1.CanaryRelease, stepIndex int32, weight int32) {
 	if cr.Status.CurrentStepIndex == stepIndex && cr.Status.CurrentWeight == weight && cr.Status.LastStepTime != nil {
 		return
 	}
 	setStepStatus(cr, stepIndex, weight)
+}
+
+func stepMessage(cr *deployv1alpha1.CanaryRelease, stepIndex int32, weight int32, requeueAfter time.Duration) string {
+	if isLastStep(cr, stepIndex) {
+		return fmt.Sprintf("promoted canary at weight %d%%", weight)
+	}
+	if !cr.Spec.AutoPromotion {
+		return fmt.Sprintf("applied canary weight %d%% and waiting for manual promotion", weight)
+	}
+	return fmt.Sprintf("applied canary weight %d%%; next step in %s", weight, requeueAfter.Round(time.Second))
 }
 
 func canaryDeploymentName(cr *deployv1alpha1.CanaryRelease) string {
