@@ -18,7 +18,10 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 
+	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -66,7 +69,65 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		"generation", canaryRelease.Generation,
 	)
 
+	if canaryRelease.Spec.StableRef.Name == "" {
+		statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
+			setPhase(&canaryRelease, deployv1alpha1.PhasePending)
+			setMessage(&canaryRelease, "waiting for stableRef.name")
+			setObservedGeneration(&canaryRelease)
+		})
+		return ctrl.Result{}, statusErr
+	}
+
+	var stableDeployment appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: canaryRelease.Namespace,
+		Name:      canaryRelease.Spec.StableRef.Name,
+	}, &stableDeployment); err != nil {
+		if apierrors.IsNotFound(err) {
+			statusErr := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
+				setPhase(&canaryRelease, deployv1alpha1.PhasePending)
+				setMessage(&canaryRelease, fmt.Sprintf("waiting for stable Deployment %q", canaryRelease.Spec.StableRef.Name))
+				setObservedGeneration(&canaryRelease)
+			})
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, err
+	}
+
+	if err := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
+		setPhase(&canaryRelease, deployv1alpha1.PhaseProgressing)
+		setStableImage(&canaryRelease, firstContainerImage(&stableDeployment))
+		setReplicasStatus(&canaryRelease, deploymentReplicas(&stableDeployment), 0)
+		setMessage(&canaryRelease, fmt.Sprintf("found stable Deployment %q", stableDeployment.Name))
+		setObservedGeneration(&canaryRelease)
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{}, nil
+}
+
+func (r *CanaryReleaseReconciler) updateStatusIfChanged(ctx context.Context, cr *deployv1alpha1.CanaryRelease, update func()) error {
+	before := cr.Status
+	update()
+	if reflect.DeepEqual(before, cr.Status) {
+		return nil
+	}
+	return r.Status().Update(ctx, cr)
+}
+
+func firstContainerImage(deployment *appsv1.Deployment) string {
+	if len(deployment.Spec.Template.Spec.Containers) == 0 {
+		return ""
+	}
+	return deployment.Spec.Template.Spec.Containers[0].Image
+}
+
+func deploymentReplicas(deployment *appsv1.Deployment) int32 {
+	if deployment.Spec.Replicas == nil {
+		return 1
+	}
+	return *deployment.Spec.Replicas
 }
 
 // SetupWithManager sets up the controller with the Manager.
