@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -43,7 +44,28 @@ var _ = Describe("KafkaTopic Controller", func() {
 		}
 		kafkatopic := &kafkav1alpha1.KafkaTopic{}
 
+		var fakeKafka *fake.Client
+		var controllerReconciler *KafkaTopicReconciler
+
+		// reconcileUntilSettled runs Reconcile a few times so multi-pass flows
+		// (finalizer add → create → status) converge.
+		reconcileUntilSettled := func() {
+			for i := 0; i < 3; i++ {
+				_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				})
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+
 		BeforeEach(func() {
+			fakeKafka = fake.New()
+			controllerReconciler = &KafkaTopicReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				Kafka:  fakeKafka,
+			}
+
 			By("creating the custom resource for the Kind KafkaTopic")
 			err := k8sClient.Get(ctx, typeNamespacedName, kafkatopic)
 			if err != nil && errors.IsNotFound(err) {
@@ -63,30 +85,31 @@ var _ = Describe("KafkaTopic Controller", func() {
 		})
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &kafkav1alpha1.KafkaTopic{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+			if err := k8sClient.Get(ctx, typeNamespacedName, resource); errors.IsNotFound(err) {
+				return
+			}
 
 			By("Cleanup the specific resource instance KafkaTopic")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			By("Reconciling deletion so the finalizer is removed")
+			reconcileUntilSettled()
+			Eventually(func() bool {
+				return errors.IsNotFound(k8sClient.Get(ctx, typeNamespacedName, resource))
+			}).Should(BeTrue())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
-			fakeKafka := fake.New()
-			controllerReconciler := &KafkaTopicReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-				Kafka:  fakeKafka,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			reconcileUntilSettled()
 
 			By("Creating the topic in Kafka")
 			Expect(fakeKafka.Names()).To(ContainElement("test-topic"))
+
+			By("Setting Ready=True on status")
+			updated := &kafkav1alpha1.KafkaTopic{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			Expect(meta.IsStatusConditionTrue(updated.Status.Conditions, conditionReady)).To(BeTrue())
 		})
 	})
 })
