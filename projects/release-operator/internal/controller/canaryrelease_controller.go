@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -44,6 +45,7 @@ type CanaryReleaseReconciler struct {
 const (
 	canaryReleaseFinalizer = "deploy.canary.com/canaryrelease-finalizer"
 	canaryReleaseLabel     = "canary-release"
+	failureCountAnnotation = "deploy.canary.com/failure-count"
 )
 
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases,verbs=get;list;watch;create;update;patch;delete
@@ -51,6 +53,7 @@ const (
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -135,11 +138,43 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, statusErr
 	}
 
+	if canaryRelease.Spec.FailurePolicy.Action == deployv1alpha1.FailureActionPause &&
+		canaryRelease.Status.Phase == deployv1alpha1.PhaseDegraded &&
+		canaryRelease.Status.ObservedGeneration == canaryRelease.Generation {
+		return ctrl.Result{RequeueAfter: healthCheckInterval(&canaryRelease)}, nil
+	}
+
 	stepIndex, requeueAfter := nextStep(&canaryRelease, time.Now())
 	weight := canaryRelease.Spec.Steps[stepIndex].Weight
 	stableReplicas, canaryReplicas := calculateReplicas(canaryRelease.Spec.TotalReplicas, weight)
 	if err := r.scaleDeployments(ctx, &stableDeployment, canaryDeployment, stableReplicas, canaryReplicas); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	failed, failureMessage, err := r.canaryUnhealthy(ctx, &canaryRelease, canaryDeployment)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if failed {
+		failureCount := canaryFailureCount(&canaryRelease) + 1
+		if failureCount < canaryRelease.Spec.HealthCheck.FailureThreshold {
+			setCanaryFailureCount(&canaryRelease, failureCount)
+			if err := r.Update(ctx, &canaryRelease); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: healthCheckInterval(&canaryRelease)}, nil
+		}
+		clearCanaryFailureCount(&canaryRelease)
+		if err := r.Update(ctx, &canaryRelease); err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.handleCanaryFailure(ctx, &canaryRelease, &stableDeployment, canaryDeployment, failureMessage)
+	}
+	if canaryFailureCount(&canaryRelease) > 0 {
+		clearCanaryFailureCount(&canaryRelease)
+		if err := r.Update(ctx, &canaryRelease); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	if err := r.updateStatusIfChanged(ctx, &canaryRelease, func() {
@@ -164,6 +199,116 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+func (r *CanaryReleaseReconciler) canaryUnhealthy(ctx context.Context, cr *deployv1alpha1.CanaryRelease, canary *appsv1.Deployment) (bool, string, error) {
+	if deploymentReplicas(canary) == 0 {
+		return false, "", nil
+	}
+	if canary.Status.UnavailableReplicas > cr.Spec.HealthCheck.MaxUnavailableCanary {
+		return true, fmt.Sprintf("canary Deployment has %d unavailable replicas", canary.Status.UnavailableReplicas), nil
+	}
+	if cr.Spec.HealthCheck.PodRestartThreshold == 0 {
+		return false, "", nil
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(cr.Namespace),
+		client.MatchingLabels(canary.Spec.Selector.MatchLabels),
+	); err != nil {
+		return false, "", err
+	}
+
+	for _, pod := range pods.Items {
+		for _, status := range pod.Status.ContainerStatuses {
+			if status.RestartCount >= cr.Spec.HealthCheck.PodRestartThreshold {
+				return true, fmt.Sprintf("canary Pod %q container %q restarted %d times", pod.Name, status.Name, status.RestartCount), nil
+			}
+		}
+	}
+
+	return false, "", nil
+}
+
+func (r *CanaryReleaseReconciler) handleCanaryFailure(ctx context.Context, cr *deployv1alpha1.CanaryRelease, stable, canary *appsv1.Deployment, failureMessage string) (ctrl.Result, error) {
+	switch cr.Spec.FailurePolicy.Action {
+	case deployv1alpha1.FailureActionPause:
+		if err := r.updateStatusIfChanged(ctx, cr, func() {
+			setFailureStatus(cr, deployv1alpha1.PhaseDegraded, "CanaryPaused", failureMessage)
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: healthCheckInterval(cr)}, nil
+	default:
+		if err := r.rollbackCanary(ctx, cr, stable, canary); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.updateStatusIfChanged(ctx, cr, func() {
+			setFailureStatus(cr, deployv1alpha1.PhaseRolledBack, "CanaryRolledBack", failureMessage)
+			setReplicasStatus(cr, deploymentReplicas(stable), deploymentReplicas(canary))
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+}
+
+func (r *CanaryReleaseReconciler) rollbackCanary(ctx context.Context, cr *deployv1alpha1.CanaryRelease, stable, canary *appsv1.Deployment) error {
+	if cr.Spec.FailurePolicy.RestoreStableReplicas {
+		if err := r.scaleDeployment(ctx, stable, cr.Spec.TotalReplicas); err != nil {
+			return err
+		}
+	}
+	if cr.Spec.FailurePolicy.DeleteCanaryOnRollback {
+		return r.deleteCanaryDeployment(ctx, cr)
+	}
+	if cr.Spec.FailurePolicy.ScaleCanaryToZero {
+		return r.scaleDeployment(ctx, canary, 0)
+	}
+	return nil
+}
+
+func setFailureStatus(cr *deployv1alpha1.CanaryRelease, phase deployv1alpha1.CanaryPhase, reason, message string) {
+	setPhase(cr, phase)
+	setMessage(cr, message)
+	setCondition(cr, ConditionProgressing, metav1.ConditionFalse, reason, message)
+	setCondition(cr, ConditionPromoted, metav1.ConditionFalse, reason, "canary release was not promoted")
+	setCondition(cr, ConditionDegraded, metav1.ConditionTrue, reason, message)
+	setObservedGeneration(cr)
+}
+
+func healthCheckInterval(cr *deployv1alpha1.CanaryRelease) time.Duration {
+	return time.Duration(cr.Spec.HealthCheck.CheckIntervalSeconds) * time.Second
+}
+
+func canaryFailureCount(cr *deployv1alpha1.CanaryRelease) int32 {
+	if cr.Annotations == nil {
+		return 0
+	}
+	value, ok := cr.Annotations[failureCountAnnotation]
+	if !ok {
+		return 0
+	}
+	count, err := strconv.ParseInt(value, 10, 32)
+	if err != nil || count < 0 {
+		return 0
+	}
+	return int32(count)
+}
+
+func setCanaryFailureCount(cr *deployv1alpha1.CanaryRelease, count int32) {
+	if cr.Annotations == nil {
+		cr.Annotations = map[string]string{}
+	}
+	cr.Annotations[failureCountAnnotation] = strconv.FormatInt(int64(count), 10)
+}
+
+func clearCanaryFailureCount(cr *deployv1alpha1.CanaryRelease) {
+	if cr.Annotations == nil {
+		return
+	}
+	delete(cr.Annotations, failureCountAnnotation)
 }
 
 func (r *CanaryReleaseReconciler) finalizeCanaryRelease(ctx context.Context, cr *deployv1alpha1.CanaryRelease) error {
