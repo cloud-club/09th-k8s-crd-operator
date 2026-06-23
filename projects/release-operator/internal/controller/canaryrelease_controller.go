@@ -46,6 +46,7 @@ const (
 	canaryReleaseFinalizer = "deploy.canary.com/canaryrelease-finalizer"
 	canaryReleaseLabel     = "canary-release"
 	failureCountAnnotation = "deploy.canary.com/failure-count"
+	lastFailureAnnotation  = "deploy.canary.com/last-failure-time"
 )
 
 // +kubebuilder:rbac:groups=deploy.canary.com,resources=canaryreleases,verbs=get;list;watch;create;update;patch;delete
@@ -143,6 +144,13 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		canaryRelease.Status.ObservedGeneration == canaryRelease.Generation {
 		return ctrl.Result{RequeueAfter: healthCheckInterval(&canaryRelease)}, nil
 	}
+	if canaryRelease.Status.Phase == deployv1alpha1.PhaseRolledBack &&
+		canaryRelease.Status.ObservedGeneration == canaryRelease.Generation {
+		if err := r.rollbackCanary(ctx, &canaryRelease, &stableDeployment, canaryDeployment); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
 
 	stepIndex, requeueAfter := nextStep(&canaryRelease, time.Now())
 	weight := canaryRelease.Spec.Steps[stepIndex].Weight
@@ -156,7 +164,16 @@ func (r *CanaryReleaseReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 	if failed {
+		now := time.Now()
+		if lastFailureTime, ok := canaryLastFailureTime(&canaryRelease); ok {
+			elapsed := now.Sub(lastFailureTime)
+			if elapsed < healthCheckInterval(&canaryRelease) {
+				return ctrl.Result{RequeueAfter: healthCheckInterval(&canaryRelease) - elapsed}, nil
+			}
+		}
+
 		failureCount := canaryFailureCount(&canaryRelease) + 1
+		setCanaryLastFailureTime(&canaryRelease, now)
 		if failureCount < canaryRelease.Spec.HealthCheck.FailureThreshold {
 			setCanaryFailureCount(&canaryRelease, failureCount)
 			if err := r.Update(ctx, &canaryRelease); err != nil {
@@ -304,11 +321,34 @@ func setCanaryFailureCount(cr *deployv1alpha1.CanaryRelease, count int32) {
 	cr.Annotations[failureCountAnnotation] = strconv.FormatInt(int64(count), 10)
 }
 
+func canaryLastFailureTime(cr *deployv1alpha1.CanaryRelease) (time.Time, bool) {
+	if cr.Annotations == nil {
+		return time.Time{}, false
+	}
+	value, ok := cr.Annotations[lastFailureAnnotation]
+	if !ok {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func setCanaryLastFailureTime(cr *deployv1alpha1.CanaryRelease, failureTime time.Time) {
+	if cr.Annotations == nil {
+		cr.Annotations = map[string]string{}
+	}
+	cr.Annotations[lastFailureAnnotation] = failureTime.UTC().Format(time.RFC3339)
+}
+
 func clearCanaryFailureCount(cr *deployv1alpha1.CanaryRelease) {
 	if cr.Annotations == nil {
 		return
 	}
 	delete(cr.Annotations, failureCountAnnotation)
+	delete(cr.Annotations, lastFailureAnnotation)
 }
 
 func (r *CanaryReleaseReconciler) finalizeCanaryRelease(ctx context.Context, cr *deployv1alpha1.CanaryRelease) error {
@@ -533,6 +573,7 @@ func deploymentReplicas(deployment *appsv1.Deployment) int32 {
 func (r *CanaryReleaseReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&deployv1alpha1.CanaryRelease{}).
+		Owns(&appsv1.Deployment{}).
 		Named("canaryrelease").
 		Complete(r)
 }
