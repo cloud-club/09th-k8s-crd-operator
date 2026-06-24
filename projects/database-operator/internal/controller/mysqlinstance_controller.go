@@ -297,11 +297,28 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 	}
 
 	// Update existing deployment if spec changed
-	deploy.Spec.Replicas = &replicas
-	if len(deploy.Spec.Template.Spec.Containers) > 0 {
-		deploy.Spec.Template.Spec.Containers[0].Image = fmt.Sprintf("mysql:%s", mysql.Spec.Version)
+	updated := false
+
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != replicas {
+		deploy.Spec.Replicas = &replicas
+		updated = true
 	}
-	return r.Update(ctx, deploy)
+
+	desiredImage := fmt.Sprintf("mysql:%s", mysql.Spec.Version)
+
+	if len(deploy.Spec.Template.Spec.Containers) > 0 &&
+		deploy.Spec.Template.Spec.Containers[0].Image != desiredImage {
+		deploy.Spec.Template.Spec.Containers[0].Image = desiredImage
+		mysql.Status.Phase = "Upgrading"
+		_ = r.Status().Update(ctx, mysql)
+		updated = true
+	}
+
+	if updated {
+		return r.Update(ctx, deploy)
+	}
+
+	return nil
 }
 
 // ──────────────────────────────────────────────
