@@ -108,4 +108,9 @@ spec:
         volumeMounts: []
       volumes: []
       serviceAccountName: controller-manager
+      # Pull the operator image from the private ghcr package. Create the secret once:
+      #   kubectl create secret docker-registry ghcr-pull -n team-2 \
+      #     --docker-server=ghcr.io --docker-username=<gh-user> --docker-password=$GH_PAT
+      imagePullSecrets:
+        - name: ghcr-pull
       terminationGracePeriodSeconds: 10
