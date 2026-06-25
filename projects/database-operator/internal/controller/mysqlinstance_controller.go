@@ -184,10 +184,14 @@ func (r *MySQLInstanceReconciler) reconcilePVC(ctx context.Context, mysql *dbv1.
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: mysql.Namespace}, pvc)
+
 	if err != nil && !errors.IsNotFound(err) {
 		return err
 	}
 
+	// ────────────────
+	// 1. PVC 없으면 생성
+	// ────────────────
 	if errors.IsNotFound(err) {
 		pvc = &corev1.PersistentVolumeClaim{
 			ObjectMeta: metav1.ObjectMeta{
@@ -211,6 +215,20 @@ func (r *MySQLInstanceReconciler) reconcilePVC(ctx context.Context, mysql *dbv1.
 			return err
 		}
 		return r.Create(ctx, pvc)
+	}
+
+	// ────────────────
+	// 2. PVC 존재 → 스토리지 확장 체크
+	// ────────────────
+	current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	desired := resource.MustParse(mysql.Spec.StorageSize)
+
+	if current.Cmp(desired) < 0 {
+		pvcCopy := pvc.DeepCopy()
+		pvcCopy.Spec.Resources.Requests[corev1.ResourceStorage] = desired
+		if err := r.Update(ctx, pvcCopy); err != nil {
+			return err
+		}
 	}
 
 	return nil
