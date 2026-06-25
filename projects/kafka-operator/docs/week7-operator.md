@@ -593,13 +593,13 @@ spec:
 #### 6. CR 적용
 `kubectl apply -f config/samples/kafka_v1alpha1_kafkatopic.yaml -n team-2`
 
-![alt text](images/image.png)
+![alt text](images/image-27.png)
 - CR 적용 후 get을 통해 확인해보면 오브젝트가 잘 떠있다.
 
-![alt text](images/image-1.png)
+![alt text](images/image-28.png)
 - desired state가 잘 반영되어있다.
 
-![alt text](images/image-2.png)
+![alt text](images/image-29.png)
 - controller 로그를 보면 CR 적용 후 Created topic이 찍힌다.
 
 #### 7. 테스트 후 정리
