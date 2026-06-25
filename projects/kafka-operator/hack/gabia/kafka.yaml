@@ -1,0 +1,103 @@
+# In-cluster Kafka for the gabia deployment (single-broker KRaft, no ZooKeeper).
+# The KafkaTopic operator connects to it via the Service DNS below.
+#
+#   kubectl apply -f hack/gabia/kafka.yaml
+#   # bootstrap = kafka.team-2.svc.cluster.local:9092 (see config/manager/configmap.yaml)
+#
+# Storage is ephemeral (emptyDir): if the broker restarts, topics are lost, but
+# the operator re-reconciles every KafkaTopic CR and recreates them. Add a
+# volumeClaimTemplate if persistence is required.
+#
+# NOTE: this places Kafka inside k8s for a self-contained demo. The project's
+# "Kafka is external" assumption still holds for the operator — it only speaks
+# the Kafka admin protocol and does not manage Kafka's lifecycle.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: team-2
+  labels:
+    app: kafka
+spec:
+  clusterIP: None # headless: stable DNS kafka.team-2.svc.cluster.local
+  selector:
+    app: kafka
+  ports:
+    - name: plaintext
+      port: 9092
+      targetPort: 9092
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: team-2
+  labels:
+    app: kafka
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka
+  template:
+    metadata:
+      labels:
+        app: kafka
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.9.0
+          ports:
+            - containerPort: 9092
+              name: plaintext
+            - containerPort: 9093
+              name: controller
+          env:
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            # Bind all interfaces (:9092 avoids the 0.0.0.0 advertised-address check);
+            # advertise the Service DNS so other pods (the operator) can reach the broker.
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:9092,CONTROLLER://:9093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka.team-2.svc.cluster.local:9092"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@localhost:9093"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            # Only the operator creates topics — keep absent topics returning not-found.
+            - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
+              value: "false"
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx512M -Xms256M"
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/kafka/data
+      volumes:
+        - name: data
+          emptyDir: {}
