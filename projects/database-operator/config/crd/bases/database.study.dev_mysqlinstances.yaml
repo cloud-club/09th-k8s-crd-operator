@@ -55,6 +55,8 @@ spec:
           spec:
             description: MySQLInstanceSpec defines the desired state of MySQLInstance.
             properties:
+              backupSchedule:
+                type: string
               initSQL:
                 items:
                   type: string

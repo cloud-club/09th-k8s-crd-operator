@@ -36,6 +36,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dbv1 "github.com/09th-k8s-crd-operator/projects/database-operator/api/v1"
+	batchv1 "k8s.io/api/batch/v1"
 )
 
 const (
@@ -57,6 +58,7 @@ type MySQLInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;update;patch;delete
 
 func (r *MySQLInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -130,6 +132,12 @@ func (r *MySQLInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// ── Reconcile Backup PVC ──
+	if err := r.reconcileBackupPVC(ctx, mysql); err != nil {
+		log.Error(err, "Failed to reconcile Backup PVC")
+		return ctrl.Result{}, err
+	}
+
 	// ── Reconcile Init SQL ConfigMap ──
 	if err := r.reconcileInitSQLConfigMap(ctx, mysql); err != nil {
 		log.Error(err, "Failed to reconcile InitSQL ConfigMap")
@@ -148,13 +156,23 @@ func (r *MySQLInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
+	// ── Reconcile Backup CronJob ──
+	if err := r.reconcileBackupCronJob(ctx, mysql); err != nil {
+		log.Error(err, "Failed to reconcile Backup CronJob")
+		return ctrl.Result{}, err
+	}
+
 	// ── Update Status ──
 	if err := r.updateStatus(ctx, mysql); err != nil {
 		log.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	if mysql.Status.Phase != "Running" {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // ──────────────────────────────────────────────
@@ -192,6 +210,51 @@ func (r *MySQLInstanceReconciler) reconcilePVC(ctx context.Context, mysql *dbv1.
 		if err := controllerutil.SetControllerReference(mysql, pvc, r.Scheme); err != nil {
 			return err
 		}
+		return r.Create(ctx, pvc)
+	}
+
+	return nil
+}
+
+func (r *MySQLInstanceReconciler) reconcileBackupPVC(
+	ctx context.Context,
+	mysql *dbv1.MySQLInstance,
+) error {
+	pvcName := fmt.Sprintf("%s-backup", mysql.Name)
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      pvcName,
+		Namespace: mysql.Namespace,
+	}, pvc)
+
+	if err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+
+	if errors.IsNotFound(err) {
+		pvc = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pvcName,
+				Namespace: mysql.Namespace,
+				Labels:    labelsForMySQL(mysql),
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{
+					corev1.ReadWriteOnce,
+				},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: resource.MustParse("1Gi"),
+					},
+				},
+			},
+		}
+
+		if err := controllerutil.SetControllerReference(mysql, pvc, r.Scheme); err != nil {
+			return err
+		}
+
 		return r.Create(ctx, pvc)
 	}
 
@@ -401,6 +464,11 @@ func (r *MySQLInstanceReconciler) reconcileInitSQLConfigMap(ctx context.Context,
 		return r.Create(ctx, cm)
 	}
 
+	if cm.Data["init.sql"] != sql {
+		cm.Data["init.sql"] = sql
+		return r.Update(ctx, cm)
+	}
+
 	return nil
 }
 
@@ -444,6 +512,105 @@ func (r *MySQLInstanceReconciler) reconcileService(ctx context.Context, mysql *d
 }
 
 // ──────────────────────────────────────────────
+// Backup CronJob
+// ──────────────────────────────────────────────
+
+func (r *MySQLInstanceReconciler) reconcileBackupCronJob(
+	ctx context.Context,
+	mysql *dbv1.MySQLInstance,
+) error {
+	if mysql.Spec.BackupSchedule == "" {
+		return nil
+	}
+
+	cronJobName := fmt.Sprintf("%s-backup", mysql.Name)
+
+	cronJob := &batchv1.CronJob{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      cronJobName,
+		Namespace: mysql.Namespace,
+	}, cronJob)
+
+	if err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+
+	desired := &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cronJobName,
+			Namespace: mysql.Namespace,
+			Labels:    labelsForMySQL(mysql),
+		},
+		Spec: batchv1.CronJobSpec{
+			Schedule: mysql.Spec.BackupSchedule,
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{
+							RestartPolicy: corev1.RestartPolicyOnFailure,
+							Containers: []corev1.Container{
+								{
+									Name:  "mysql-backup",
+									Image: fmt.Sprintf("mysql:%s", mysql.Spec.Version),
+									Command: []string{
+										"/bin/sh",
+										"-c",
+										fmt.Sprintf(
+											"mysqldump -h %s-mysql -uroot -p$MYSQL_ROOT_PASSWORD --all-databases > /backup/backup-$(date +%%F-%%H-%%M).sql",
+											mysql.Name,
+										),
+									},
+									Env: []corev1.EnvVar{
+										{
+											Name: "MYSQL_ROOT_PASSWORD",
+											ValueFrom: &corev1.EnvVarSource{
+												SecretKeyRef: &corev1.SecretKeySelector{
+													LocalObjectReference: corev1.LocalObjectReference{
+														Name: mysql.Spec.RootPasswordSecret,
+													},
+													Key: "password",
+												},
+											},
+										},
+									},
+									VolumeMounts: []corev1.VolumeMount{
+										{
+											Name:      "backup-storage",
+											MountPath: "/backup",
+										},
+									},
+								},
+							},
+							Volumes: []corev1.Volume{
+								{
+									Name: "backup-storage",
+									VolumeSource: corev1.VolumeSource{
+										PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+											ClaimName: fmt.Sprintf("%s-backup", mysql.Name),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(mysql, desired, r.Scheme); err != nil {
+		return err
+	}
+
+	if errors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	}
+
+	cronJob.Spec = desired.Spec
+	return r.Update(ctx, cronJob)
+}
+
+// ──────────────────────────────────────────────
 // Status Update
 // ──────────────────────────────────────────────
 
@@ -459,14 +626,20 @@ func (r *MySQLInstanceReconciler) updateStatus(ctx context.Context, mysql *dbv1.
 	mysql.Status.ReadyReplicas = deploy.Status.ReadyReplicas
 	mysql.Status.ServiceName = svcName
 
-	if deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
-		mysql.Status.Phase = "Running"
-	} else if deploy.Status.ReadyReplicas > 0 {
-		mysql.Status.Phase = "Creating"
-	} else {
-		mysql.Status.Phase = "Pending"
+	// 1. 상태 변수만 계산
+	phase := mysql.Status.Phase
+
+	if mysql.Status.Phase == "Pending" {
+		phase = "Creating"
 	}
 
+	// Deployment 상태 보고
+	if deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
+		phase = "Running"
+	}
+
+	// 2. 마지막에 한 번만 반영
+	mysql.Status.Phase = phase
 	return r.Status().Update(ctx, mysql)
 }
 
@@ -501,6 +674,7 @@ func (r *MySQLInstanceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&batchv1.CronJob{}).
 		Named("mysqlinstance").
 		Complete(r)
 }

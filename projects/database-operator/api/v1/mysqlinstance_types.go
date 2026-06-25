@@ -39,6 +39,7 @@ type MySQLInstanceSpec struct {
 	// +kubebuilder:validation:Required
 	RootPasswordSecret string   `json:"rootPasswordSecret"`
 	InitSQL            []string `json:"initSQL,omitempty"`
+	BackupSchedule     string   `json:"backupSchedule,omitempty"`
 }
 
 // MySQLInstanceStatus defines the observed state of MySQLInstance.

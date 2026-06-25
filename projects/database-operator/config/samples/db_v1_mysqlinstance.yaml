@@ -11,3 +11,5 @@ spec:
   initSQL:
     - CREATE DATABASE appdb
     - CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255))
+
+  backupSchedule: "0 */6 * * *"
