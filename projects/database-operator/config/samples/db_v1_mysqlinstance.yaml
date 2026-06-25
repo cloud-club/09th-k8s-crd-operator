@@ -7,6 +7,7 @@ spec:
   version: "8.0"
   replicas: 1
   storageSize: "1Gi"
+  storageClassName: longhorn
   rootPasswordSecret: mysql-root-secret
   initSQL:
     - CREATE DATABASE appdb

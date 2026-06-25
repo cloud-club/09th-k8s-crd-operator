@@ -34,7 +34,8 @@ type MySQLInstanceSpec struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^\d+(Mi|Gi)$`
 	// +kubebuilder:default="1Gi"
-	StorageSize string `json:"storageSize"`
+	StorageSize      string `json:"storageSize"`
+	StorageClassName string `json:"storageClassName,omitempty"`
 
 	// +kubebuilder:validation:Required
 	RootPasswordSecret string   `json:"rootPasswordSecret"`
