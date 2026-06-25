@@ -8,7 +8,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
 data:
   # Comma-separated Kafka bootstrap servers the operator connects to.
-  # When the operator runs inside the cluster but Kafka runs on the host
-  # (kind / Docker Desktop), use host.docker.internal so the pod can reach it.
+  # In-cluster Kafka deployed by hack/gabia/kafka.yaml (Service "kafka" in team-2).
+  # For a host-run kind/Docker Desktop broker instead, use host.docker.internal:9092.
   # Set to an empty string to fall back to the in-memory fake client.
-  bootstrap: "host.docker.internal:9092"
+  bootstrap: "kafka.team-2.svc.cluster.local:9092"

@@ -1,5 +1,8 @@
 # Adds namespace to all resources.
-namespace: kafka-operator-system
+
+# team-2 per docs/cluster-rules.md (shared study cluster: each team deploys
+# only into its own namespace). The namespace must already exist.
+namespace: team-2
 
 # Value of this field is prepended to the
 # names of all resources, e.g. a deployment named
