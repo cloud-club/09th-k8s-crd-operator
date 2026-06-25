@@ -8,3 +8,6 @@ spec:
   replicas: 1
   storageSize: "1Gi"
   rootPasswordSecret: mysql-root-secret
+  initSQL:
+    - CREATE DATABASE appdb
+    - CREATE TABLE users (id INT PRIMARY KEY, name VARCHAR(255))

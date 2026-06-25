@@ -55,6 +55,10 @@ spec:
           spec:
             description: MySQLInstanceSpec defines the desired state of MySQLInstance.
             properties:
+              initSQL:
+                items:
+                  type: string
+                type: array
               replicas:
                 default: 1
                 format: int32
