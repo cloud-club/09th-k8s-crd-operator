@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CanaryRelease 데모 대시보드</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --bg-panel: #1a2332;
+      --bg-header: #121a24;
+      --border: #2d3a4d;
+      --text: #e6edf3;
+      --text-muted: #8b9cb3;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --warn: #f59e0b;
+      --ok: #22c55e;
+      --stable: #60a5fa;
+      --canary: #a78bfa;
+      --log-info: #94a3b8;
+      --log-warn: #fbbf24;
+      --log-err: #f87171;
+      --log-ok: #4ade80;
+      --font: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+      --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.5;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      padding: 0.75rem 1.25rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+    }
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-right: auto;
+      letter-spacing: -0.02em;
+    }
+    header h1 span { color: var(--text-muted); font-weight: 400; font-size: 0.85rem; }
+    .btn-group { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    button {
+      font-family: inherit;
+      font-size: 0.8125rem;
+      padding: 0.45rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-panel);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); background: #243044; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+    button.danger { border-color: #7f1d1d; color: #fecaca; }
+    button.danger:hover:not(:disabled) { background: #3f1515; border-color: var(--danger); }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(280px, 420px);
+      gap: 1rem;
+      padding: 1rem 1.25rem 1.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) {
+      main { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+    }
+    .panel h2 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      margin-bottom: 0.85rem;
+    }
+    .phase-badge {
+      display: inline-block;
+      font-size: 1.25rem;
+      font-weight: 700;
+      padding: 0.35rem 0.75rem;
+      border-radius: 8px;
+      background: #243044;
+      border: 1px solid var(--border);
+      margin-bottom: 0.75rem;
+    }
+    .phase-badge.promoted { background: rgba(34, 197, 94, 0.15); border-color: var(--ok); color: var(--log-ok); }
+    .phase-badge.rolledback { background: rgba(239, 68, 68, 0.15); border-color: var(--danger); color: var(--log-err); }
+    .phase-badge.progressing { border-color: var(--accent); color: #93c5fd; }
+    .phase-badge.degraded { border-color: var(--warn); color: #fcd34d; }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.5rem 1rem;
+      font-size: 0.8125rem;
+      margin-bottom: 0.85rem;
+    }
+    .meta-grid dt { color: var(--text-muted); }
+    .meta-grid dd { font-family: var(--mono); font-size: 0.78rem; word-break: break-all; }
+    .message-box {
+      font-size: 0.8125rem;
+      padding: 0.65rem 0.75rem;
+      background: #121820;
+      border-radius: 6px;
+      border-left: 3px solid var(--accent);
+      margin-bottom: 1rem;
+      min-height: 2.5rem;
+    }
+    .timers {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 600px) {
+      .timers { grid-template-columns: 1fr; }
+    }
+    .timer-card {
+      background: #121820;
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
+      text-align: center;
+    }
+    .timer-card label {
+      display: block;
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }
+    .timer-card .value {
+      font-family: var(--mono);
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+    .bar-section { margin-bottom: 1rem; }
+    .bar-section:last-child { margin-bottom: 0; }
+    .bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      margin-bottom: 0.35rem;
+    }
+    .bar-label .name { font-weight: 600; }
+    .bar-track {
+      height: 22px;
+      background: #121820;
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+    }
+    .bar-fill {
+      height: 100%;
+      transition: width 0.4s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: #0f1419;
+    }
+    .bar-fill.stable { background: var(--stable); }
+    .bar-fill.canary { background: var(--canary); }
+    .bar-note {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      margin-top: 0.5rem;
+      line-height: 1.4;
+    }
+    .traffic-stacked {
+      height: 28px;
+      display: flex;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #121820;
+    }
+    .log-panel {
+      display: flex;
+      flex-direction: column;
+      min-height: 480px;
+      max-height: calc(100vh - 120px);
+    }
+    .log-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+    .log-toolbar button { font-size: 0.7rem; padding: 0.25rem 0.5rem; }
+    #event-log {
+      flex: 1;
+      overflow-y: auto;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.55;
+      background: #0a0e14;
+      border-radius: 6px;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--border);
+    }
+    .log-line { padding: 0.1rem 0; border-bottom: 1px solid rgba(45, 58, 77, 0.35); }
+    .log-line.info { color: var(--log-info); }
+    .log-line.warn { color: var(--log-warn); }
+    .log-line.err { color: var(--log-err); font-weight: 600; }
+    .log-line.ok { color: var(--log-ok); font-weight: 600; }
+    .log-line .ts { color: #64748b; margin-right: 0.5rem; }
+    .conn-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      display: inline-block;
+      margin-left: 0.35rem;
+      vertical-align: middle;
+    }
+    .conn-dot.err { background: var(--danger); }
+    footer {
+      text-align: center;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      padding: 0.5rem;
+    }
+    .header-hints {
+      width: 100%;
+      flex-basis: 100%;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+      padding-top: 0.15rem;
+    }
+    .header-hints strong { color: #cbd5e1; font-weight: 600; }
+    .timer-card.frozen .value { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CanaryRelease 데모 <span>release-operator</span></h1>
+    <div class="btn-group">
+      <button type="button" class="primary" id="btn-start">시작</button>
+      <button type="button" id="btn-reset">리셋</button>
+      <button type="button" class="danger" id="btn-crash" title="Step 1~2, Canary Pod ≥ 1일 때 — 런타임 크래시 시나리오">장애 주입: Pod 크래시</button>
+      <button type="button" class="danger" id="btn-image" title="시작 직후~진행 중 — ImagePullBackOff 배포 실패 시나리오">장애 주입: 잘못된 이미지</button>
+    </div>
+    <p class="header-hints">
+      <strong>Pod 크래시</strong> — Canary가 떠 있는 Step 1~2에서 주입 ·
+      <strong>잘못된 이미지</strong> — 시작 직후 배포 실패 데모 ·
+      롤백 탐지 ≈ health check 간격 × 실패 임계값
+    </p>
+  </header>
+
+  <main>
+    <section class="panel" aria-label="상태">
+      <h2>CanaryRelease 상태</h2>
+      <div id="phase-badge" class="phase-badge">—</div>
+      <dl class="meta-grid" id="meta-grid">
+        <dt>CR 존재</dt><dd id="meta-exists">—</dd>
+        <dt>Step</dt><dd id="meta-step">—</dd>
+        <dt>Weight</dt><dd id="meta-weight">—</dd>
+        <dt>이미지</dt><dd id="meta-image">—</dd>
+        <dt>Stable (CR)</dt><dd id="meta-cr-stable">—</dd>
+        <dt>Canary (CR)</dt><dd id="meta-cr-canary">—</dd>
+        <dt>전체 Replica</dt><dd id="meta-total">—</dd>
+        <dt>Deployment</dt><dd id="meta-deploy">—</dd>
+        <dt>Health check</dt><dd id="meta-health">—</dd>
+      </dl>
+      <div class="message-box" id="message">메시지 대기 중…</div>
+
+      <h2>타이머</h2>
+      <div class="timers">
+        <div class="timer-card">
+          <label>전체 경과</label>
+          <div class="value" id="timer-total">—</div>
+        </div>
+        <div class="timer-card" id="timer-step-card">
+          <label id="timer-step-label">현재 Step 경과</label>
+          <div class="value" id="timer-step">—</div>
+        </div>
+        <div class="timer-card">
+          <label>다음 Step까지</label>
+          <div class="value" id="timer-next">—</div>
+        </div>
+      </div>
+
+      <h2>Replica 분포</h2>
+      <div class="bar-section">
+        <div class="bar-label">
+          <span class="name" style="color: var(--stable)">Stable</span>
+          <span id="rep-stable-text">0</span>
+        </div>
+        <div class="bar-track" id="rep-track">
+          <div class="bar-fill stable" id="rep-stable-bar" style="width: 0%"></div>
+          <div class="bar-fill canary" id="rep-canary-bar" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <h2>실측 트래픽 (샘플 50회)</h2>
+      <div class="bar-section">
+        <div class="bar-label">
+          <span class="name">Stable vs Canary</span>
+          <span id="traffic-text">—</span>
+        </div>
+        <div class="traffic-stacked" id="traffic-track">
+          <div class="bar-fill stable" id="traffic-stable" style="width: 50%"></div>
+          <div class="bar-fill canary" id="traffic-canary" style="width: 50%"></div>
+        </div>
+        <p class="bar-note">
+          Service로 50회 요청한 whoami 응답 기준입니다. kube-proxy/Endpoint 분배 특성상
+          CR의 Weight와 완전히 일치하지 않을 수 있으며, 대략적인 분포 참고용입니다.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel log-panel" aria-label="이벤트 로그">
+      <div class="log-toolbar">
+        <h2 style="margin: 0">이벤트 로그</h2>
+        <div>
+          <span id="poll-status" style="font-size: 0.7rem; color: var(--text-muted)">폴링 중</span>
+          <span class="conn-dot" id="conn-dot" title="API 연결"></span>
+          <button type="button" id="btn-clear-log">로그 지우기</button>
+        </div>
+      </div>
+      <div id="event-log" role="log" aria-live="polite"></div>
+    </section>
+  </main>
+  <footer>상태 3초 · 트래픽 5초 폴링 · POST /api/start · /api/reset · /api/inject-*</footer>
+
+  <script>
+(function () {
+  "use strict";
+
+  var prevSnapshot = null;
+  var localTimerBase = null;
+  var lastStatus = null;
+  var lastConnOk = true;
+  var statusPollMs = 3000;
+  var trafficPollMs = 5000;
+
+  var el = {
+    phase: document.getElementById("phase-badge"),
+    exists: document.getElementById("meta-exists"),
+    step: document.getElementById("meta-step"),
+    weight: document.getElementById("meta-weight"),
+    image: document.getElementById("meta-image"),
+    crStable: document.getElementById("meta-cr-stable"),
+    crCanary: document.getElementById("meta-cr-canary"),
+    total: document.getElementById("meta-total"),
+    deploy: document.getElementById("meta-deploy"),
+    health: document.getElementById("meta-health"),
+    message: document.getElementById("message"),
+    timerStepCard: document.getElementById("timer-step-card"),
+    timerStepLabel: document.getElementById("timer-step-label"),
+    timerTotal: document.getElementById("timer-total"),
+    timerStep: document.getElementById("timer-step"),
+    timerNext: document.getElementById("timer-next"),
+    repStableText: document.getElementById("rep-stable-text"),
+    repStableBar: document.getElementById("rep-stable-bar"),
+    repCanaryBar: document.getElementById("rep-canary-bar"),
+    trafficText: document.getElementById("traffic-text"),
+    trafficStable: document.getElementById("traffic-stable"),
+    trafficCanary: document.getElementById("traffic-canary"),
+    eventLog: document.getElementById("event-log"),
+    connDot: document.getElementById("conn-dot"),
+    pollStatus: document.getElementById("poll-status"),
+  };
+
+  function pad(n) { return n < 10 ? "0" + n : String(n); }
+
+  // Go omitempty 대비 + 0 값 표시 (stepIndex 0 = 1단계)
+  function num(v, fallback) {
+    return v !== undefined && v !== null ? v : fallback;
+  }
+  function displayStep(stepIndex, stepCount) {
+    if (stepCount == null || stepCount === 0) return "—";
+    return (num(stepIndex, 0) + 1) + " / " + stepCount;
+  }
+
+  function formatDuration(sec) {
+    if (sec == null || isNaN(sec)) return "—";
+    sec = Math.max(0, Math.floor(sec));
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (h > 0) return h + ":" + pad(m) + ":" + pad(s);
+    return pad(m) + ":" + pad(s);
+  }
+
+  function nowTs() {
+    var d = new Date();
+    return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function appendLog(text, kind) {
+    kind = kind || "info";
+    var line = document.createElement("div");
+    line.className = "log-line " + kind;
+    var ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = "[" + nowTs() + "]";
+    line.appendChild(ts);
+    line.appendChild(document.createTextNode(text));
+    el.eventLog.appendChild(line);
+    el.eventLog.scrollTop = el.eventLog.scrollHeight;
+  }
+
+  function messageLogKey(msg) {
+    if (!msg) return "";
+    return msg.replace(/;\s*next step in \d+s$/i, "").trim();
+  }
+
+  function snapshotFromStatus(data) {
+    var cr = data.canaryRelease || {};
+    return JSON.stringify({
+      exists: cr.exists,
+      phase: cr.phase || "",
+      stepIndex: num(cr.stepIndex, 0),
+      stepCount: cr.stepCount,
+      weight: num(cr.weight, 0),
+      messageKey: messageLogKey(cr.message || ""),
+      stableReplicas: cr.stableReplicas,
+      canaryReplicas: cr.canaryReplicas,
+      totalReplicas: cr.totalReplicas,
+      depStable: data.stableReplicas,
+      depCanary: data.canaryReplicas,
+    });
+  }
+
+  function diffAndLog(data) {
+    var snap = snapshotFromStatus(data);
+    if (prevSnapshot === null) {
+      appendLog("대시보드 연결됨. 상태 폴링을 시작합니다.", "info");
+      prevSnapshot = snap;
+      logCurrentState(data, true);
+      return;
+    }
+    if (snap === prevSnapshot) return;
+
+    var prev = JSON.parse(prevSnapshot);
+    var cur = JSON.parse(snap);
+    prevSnapshot = snap;
+
+    if (prev.exists !== cur.exists) {
+      appendLog(cur.exists ? "CanaryRelease 리소스가 감지되었습니다." : "CanaryRelease가 없습니다.", "warn");
+    }
+    if (prev.phase !== cur.phase && cur.phase) {
+      var kind = "info";
+      if (cur.phase === "Promoted") kind = "ok";
+      else if (cur.phase === "RolledBack") kind = "err";
+      else if (cur.phase === "Degraded" || cur.phase === "RollingBack") kind = "warn";
+      appendLog("Phase 변경: " + (prev.phase || "(없음)") + " → " + cur.phase, kind);
+    }
+    if (cur.exists && (prev.stepIndex !== cur.stepIndex || prev.weight !== cur.weight)) {
+      appendLog(
+        "Step 갱신: " + displayStep(cur.stepIndex, cur.stepCount) +
+        ", weight " + num(cur.weight, "—") + "%",
+        "info"
+      );
+    }
+    if (prev.messageKey !== cur.messageKey && cur.messageKey) {
+      var cr = data.canaryRelease || {};
+      appendLog("메시지: " + (cr.message || cur.messageKey), cur.phase === "RolledBack" ? "err" : "info");
+    }
+    if (cur.exists && (prev.stableReplicas !== cur.stableReplicas || prev.canaryReplicas !== cur.canaryReplicas)) {
+      appendLog(
+        "CR Replica — Stable: " + num(cur.stableReplicas, 0) +
+        ", Canary: " + num(cur.canaryReplicas, 0),
+        "info"
+      );
+    }
+    if (prev.depStable !== cur.depStable || prev.depCanary !== cur.depCanary) {
+      appendLog(
+        "Deployment Replica — Stable: " + cur.depStable + ", Canary: " + cur.depCanary,
+        "info"
+      );
+    }
+  }
+
+  function logCurrentState(data, initial) {
+    var cr = data.canaryRelease || {};
+    if (!cr.exists) {
+      if (initial) appendLog("CanaryRelease 미생성. 「시작」으로 배포를 시작하세요.", "warn");
+      return;
+    }
+    if (initial) {
+      appendLog("현재 Phase: " + (cr.phase || "—") + ", Weight: " + (cr.weight != null ? cr.weight : "—") + "%", "info");
+    }
+  }
+
+  function phaseClass(phase) {
+    if (!phase) return "";
+    if (phase === "Promoted") return "promoted";
+    if (phase === "RolledBack") return "rolledback";
+    if (phase === "Progressing" || phase === "Promoting") return "progressing";
+    if (phase === "Degraded" || phase === "RollingBack") return "degraded";
+    return "";
+  }
+
+  function renderStatus(data) {
+    lastStatus = data;
+    localTimerBase = Date.now();
+    var cr = data.canaryRelease || {};
+    var phase = cr.exists ? (cr.phase || "—") : "미생성";
+    el.phase.textContent = phase;
+    el.phase.className = "phase-badge " + phaseClass(cr.phase);
+
+    el.exists.textContent = cr.exists ? "예" : "아니오";
+    if (cr.exists) {
+      el.step.textContent = displayStep(cr.stepIndex, cr.stepCount);
+      el.weight.textContent = num(cr.weight, 0) + "%";
+      el.image.textContent = cr.image || "—";
+      el.crStable.textContent = String(num(cr.stableReplicas, 0));
+      el.crCanary.textContent = String(num(cr.canaryReplicas, 0));
+      el.total.textContent = String(num(cr.totalReplicas, 0));
+    } else {
+      el.step.textContent = "—";
+      el.weight.textContent = "—";
+      el.image.textContent = "—";
+      el.crStable.textContent = "—";
+      el.crCanary.textContent = "—";
+      el.total.textContent = "—";
+    }
+    el.deploy.textContent = "stable " + data.stableReplicas + " · canary " + data.canaryReplicas;
+
+    if (data.healthCheck) {
+      var hc = data.healthCheck;
+      el.health.textContent =
+        hc.checkIntervalSeconds + "s 간격 · 실패 " + hc.failureThreshold + "회 · restart ≥ " + hc.podRestartThreshold;
+    } else {
+      el.health.textContent = "—";
+    }
+
+    el.message.textContent = cr.message || (cr.exists ? "(메시지 없음)" : "CanaryRelease를 생성하려면 상단 「시작」을 누르세요.");
+
+    updateTimersFromServer(data.timers);
+    renderReplicaBars(data);
+    diffAndLog(data);
+  }
+
+  function updateTimersFromServer(timers) {
+    timers = timers || {};
+    el.timerTotal.textContent = formatDuration(timers.totalElapsedSec);
+    el.timerStep.textContent = formatDuration(timers.stepElapsedSec);
+    if (timers.nextStepInSec != null) {
+      el.timerNext.textContent = formatDuration(timers.nextStepInSec);
+    } else {
+      el.timerNext.textContent = "—";
+    }
+    var frozen = !!timers.stepFrozen;
+    el.timerStepCard.classList.toggle("frozen", frozen);
+    el.timerStepLabel.textContent = frozen ? "마지막 Step 경과" : "현재 Step 경과";
+  }
+
+  function tickLocalTimers() {
+    if (!lastStatus || !localTimerBase) return;
+    var timers = lastStatus.timers;
+    if (!timers) return;
+    var delta = (Date.now() - localTimerBase) / 1000;
+    el.timerTotal.textContent = formatDuration((timers.totalElapsedSec || 0) + delta);
+    if (timers.stepFrozen) {
+      el.timerStep.textContent = formatDuration(timers.stepElapsedSec || 0);
+    } else {
+      el.timerStep.textContent = formatDuration((timers.stepElapsedSec || 0) + delta);
+    }
+    if (timers.nextStepInSec != null) {
+      el.timerNext.textContent = formatDuration(Math.max(0, timers.nextStepInSec - delta));
+    }
+  }
+
+  function renderReplicaBars(data) {
+    var cr = data.canaryRelease || {};
+    var stable, canary, total;
+    if (cr.exists && cr.totalReplicas > 0) {
+      stable = cr.stableReplicas != null ? cr.stableReplicas : 0;
+      canary = cr.canaryReplicas != null ? cr.canaryReplicas : 0;
+      total = cr.totalReplicas;
+    } else {
+      stable = data.stableReplicas || 0;
+      canary = data.canaryReplicas || 0;
+      total = stable + canary || 1;
+    }
+    if (total <= 0) total = 1;
+    var sp = (stable / total) * 100;
+    var cp = (canary / total) * 100;
+    el.repStableBar.style.width = sp + "%";
+    el.repCanaryBar.style.width = cp + "%";
+    el.repStableText.textContent = "Stable " + stable + " · Canary " + canary + " (합 " + total + ")";
+  }
+
+  function renderTraffic(counts) {
+    var stable = counts.stable || 0;
+    var canary = counts.canary || 0;
+    var total = stable + canary || 1;
+    var sp = (stable / total) * 100;
+    var cp = (canary / total) * 100;
+    el.trafficStable.style.width = sp + "%";
+    el.trafficCanary.style.width = cp + "%";
+    el.trafficText.textContent = "Stable " + stable + " · Canary " + canary + " (" + Math.round(sp) + "% / " + Math.round(cp) + "%)";
+  }
+
+  function setConn(ok) {
+    el.connDot.className = "conn-dot" + (ok ? "" : " err");
+    el.pollStatus.textContent = ok ? "폴링 중" : "API 오류";
+  }
+
+  async function fetchJSON(url, options) {
+    var res = await fetch(url, options);
+    var body = await res.json().catch(function () { return {}; });
+    if (!res.ok) {
+      var err = body.error || res.statusText || "request failed";
+      throw new Error(err);
+    }
+    return body;
+  }
+
+  async function pollStatus() {
+    try {
+      var data = await fetchJSON("/api/status");
+      renderStatus(data);
+      if (!lastConnOk) appendLog("상태 API 연결이 복구되었습니다.", "ok");
+      lastConnOk = true;
+      setConn(true);
+    } catch (e) {
+      if (lastConnOk) appendLog("상태 조회 실패: " + e.message, "err");
+      lastConnOk = false;
+      setConn(false);
+    }
+  }
+
+  async function pollTraffic() {
+    try {
+      var data = await fetchJSON("/api/traffic");
+      renderTraffic(data);
+    } catch (e) {
+      appendLog("트래픽 조회 실패: " + e.message, "warn");
+    }
+  }
+
+  async function postAction(path, label, failLabel) {
+    appendLog(label + " 요청 전송…", "info");
+    try {
+      var data = await fetchJSON(path, { method: "POST" });
+      appendLog(label + " 완료: " + JSON.stringify(data), "ok");
+      await pollStatus();
+    } catch (e) {
+      appendLog((failLabel || label) + " 실패: " + e.message, "err");
+    }
+  }
+
+  document.getElementById("btn-start").addEventListener("click", function () {
+    postAction("/api/start", "CanaryRelease 시작", "CanaryRelease 시작");
+  });
+  document.getElementById("btn-reset").addEventListener("click", function () {
+    if (!confirm("CanaryRelease와 Canary Deployment를 삭제하고 Stable을 10 replica로 되돌립니다. 계속할까요?")) return;
+    postAction("/api/reset", "리셋");
+  });
+  document.getElementById("btn-crash").addEventListener("click", function () {
+    postAction("/api/inject-crash", "Pod 크래시 장애 주입");
+  });
+  document.getElementById("btn-image").addEventListener("click", function () {
+    postAction("/api/inject-imagepull", "잘못된 이미지 장애 주입");
+  });
+  document.getElementById("btn-clear-log").addEventListener("click", function () {
+    el.eventLog.innerHTML = "";
+    appendLog("로그를 비웠습니다.", "info");
+  });
+
+  pollStatus();
+  pollTraffic();
+  setInterval(pollStatus, statusPollMs);
+  setInterval(pollTraffic, trafficPollMs);
+  setInterval(tickLocalTimers, 1000);
+})();
+  </script>
+</body>
+</html>

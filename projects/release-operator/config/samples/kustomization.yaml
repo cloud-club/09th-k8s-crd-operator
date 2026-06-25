@@ -1,0 +1,8 @@
+## Append samples of your project ##
+resources:
+- namespace.yaml
+- stable-deployment.yaml
+- stable-service.yaml
+# CanaryRelease는 대시보드 "시작" 또는 demo/scripts/demo-start.sh 로 생성
+# - deploy_v1alpha1_canaryrelease.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

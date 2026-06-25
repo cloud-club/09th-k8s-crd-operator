@@ -1,0 +1,36 @@
+apiVersion: deploy.canary.com/v1alpha1
+kind: CanaryRelease
+metadata:
+  name: demo-app
+  namespace: team-5
+  labels:
+    app.kubernetes.io/name: release-operator
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  stableRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: demo-app
+  serviceRef:
+    name: demo-app
+  image: jangwoojung/canary-demo-app:canary
+  port: 8080
+  totalReplicas: 10
+  steps:
+    - weight: 10
+    - weight: 30
+    - weight: 60
+    - weight: 100
+  interval: 30s
+  autoPromotion: true
+  healthCheck:
+    checkIntervalSeconds: 10
+    failureThreshold: 3
+    maxUnavailableCanary: 0
+    podRestartThreshold: 1
+  failurePolicy:
+    action: Rollback
+    restoreStableReplicas: true
+    scaleCanaryToZero: true
+    deleteCanaryOnRollback: false
+    deleteCanaryOnDelete: true
