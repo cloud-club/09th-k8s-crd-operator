@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canary-demo-dashboard
+  namespace: team-5
+  labels:
+    app: canary-demo-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canary-demo-dashboard
+  template:
+    metadata:
+      labels:
+        app: canary-demo-dashboard
+    spec:
+      serviceAccountName: canary-demo-dashboard
+      containers:
+        - name: dashboard
+          image: jangwoojung/canary-demo-dashboard:v0.1.2
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: NAMESPACE
+              value: team-5
+            - name: SERVICE_NAME
+              value: demo-app
+            - name: SERVICE_PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-demo-dashboard
+  namespace: team-5
+  labels:
+    app: canary-demo-dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: canary-demo-dashboard
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
