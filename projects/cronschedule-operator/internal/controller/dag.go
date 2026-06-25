@@ -125,8 +125,8 @@ func (r *CronJobScheduleReconciler) createJobForTask(
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					// 태스크 Pod는 1회성 작업이므로 재시작하지 않는다.
-					// 재시도는 Job 레벨이 아니라 syncRunningTasks에서 새 Job을 다시
-					// 만드는 방식으로 처리할 예정(Day 10, 아직 미구현).
+					// 재시도는 Job 레벨이 아니라 syncRunningTasks가 새 이름으로 Job을
+					// 다시 만드는 방식으로 처리한다.
 					RestartPolicy: corev1.RestartPolicyNever,
 					Containers: []corev1.Container{
 						{
@@ -150,11 +150,12 @@ func (r *CronJobScheduleReconciler) createJobForTask(
 // 다시 읽어와 phase를 갱신한다. Argo Workflows 컨트롤러가 자신이 띄운 Pod의 상태를
 // Watch해서 워크플로 상태를 갱신하는 것과 정확히 같은 역할.
 //
-// 지금은 성공/실패를 보면 바로 phase를 확정 짓는 가장 단순한 버전이다.
-// TODO(Day 10): Job이 실패했을 때 retries만큼 새 Job을 다시 만들어 재시도하는 로직 추가.
+// Job이 실패하면 곧바로 Failed로 확정하지 않고, task.Retries만큼 남았으면 새 이름의
+// Job을 다시 만들어 재시도한다(phase는 Running 유지). 재시도를 다 쓴 뒤에야 Failed로
+// 확정한다.
 func (r *CronJobScheduleReconciler) syncRunningTasks(
 	ctx context.Context, cjs *cronv1.CronJobSchedule,
-	record *cronv1.ExecutionRecord, phaseMap map[string]string,
+	record *cronv1.ExecutionRecord, phaseMap map[string]string, runID string,
 ) error {
 	for i := range record.TaskStatuses {
 		ts := &record.TaskStatuses[i]
@@ -175,12 +176,30 @@ func (r *CronJobScheduleReconciler) syncRunningTasks(
 		if job.Status.Succeeded > 0 {
 			ts.Phase = "Succeeded"
 			phaseMap[ts.Name] = "Succeeded"
-		} else if job.Status.Failed > 0 {
-			ts.Phase = "Failed"
-			phaseMap[ts.Name] = "Failed"
+			continue
 		}
-		// 둘 다 0이면 Pod가 아직 실행 중 → phase를 Running으로 유지하고 다음 호출에서
-		// 다시 확인한다.
+
+		if job.Status.Failed == 0 {
+			// Pod가 아직 실행 중 → phase를 Running으로 유지하고 다음 호출에서 다시 확인한다.
+			continue
+		}
+
+		taskSpec := findTaskSpec(cjs.Spec.Tasks, ts.Name)
+		if taskSpec != nil && ts.RetryCount < taskSpec.Retries {
+			ts.RetryCount++
+			retryJobName := fmt.Sprintf("%s-%s-retry-%d", runID, ts.Name, ts.RetryCount)
+			if err := r.createJobForTask(ctx, cjs, *taskSpec, retryJobName, runID); err != nil {
+				if !apierrors.IsAlreadyExists(err) {
+					return err
+				}
+			}
+			ts.JobName = retryJobName
+			// 재시도 중이므로 phase는 Running 유지, phaseMap도 그대로 둔다.
+			continue
+		}
+
+		ts.Phase = "Failed"
+		phaseMap[ts.Name] = "Failed"
 	}
 	return nil
 }
@@ -212,7 +231,7 @@ func (r *CronJobScheduleReconciler) executeDag(
 	phaseMap := buildTaskPhaseMap(record.TaskStatuses)
 
 	// 3. 이미 떠 있는 Job들의 실제 완료/실패 여부를 먼저 반영한다.
-	if err := r.syncRunningTasks(ctx, cjs, record, phaseMap); err != nil {
+	if err := r.syncRunningTasks(ctx, cjs, record, phaseMap, runID); err != nil {
 		return err
 	}
 
