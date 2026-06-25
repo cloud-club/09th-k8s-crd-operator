@@ -17,13 +17,6 @@ spec:
     spec:
       containers:
       - name: app
-        image: nginx:1.25-alpine
+        image: jangwoojung/canary-demo-app:stable
         ports:
-        - containerPort: 80
-        volumeMounts:
-        - name: html
-          mountPath: /usr/share/nginx/html
-      volumes:
-      - name: html
-        configMap:
-          name: stable-html
+        - containerPort: 8080

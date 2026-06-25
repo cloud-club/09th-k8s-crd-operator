@@ -13,8 +13,8 @@ spec:
     name: demo-app
   serviceRef:
     name: demo-app
-  image: nginx:1.27-alpine
-  port: 80
+  image: jangwoojung/canary-demo-app:canary
+  port: 8080
   totalReplicas: 10
   steps:
     - weight: 10
