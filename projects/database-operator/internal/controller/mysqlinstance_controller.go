@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -55,6 +56,7 @@ type MySQLInstanceReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 
 func (r *MySQLInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -125,6 +127,12 @@ func (r *MySQLInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// ── Reconcile PVC ──
 	if err := r.reconcilePVC(ctx, mysql); err != nil {
 		log.Error(err, "Failed to reconcile PVC")
+		return ctrl.Result{}, err
+	}
+
+	// ── Reconcile Init SQL ConfigMap ──
+	if err := r.reconcileInitSQLConfigMap(ctx, mysql); err != nil {
+		log.Error(err, "Failed to reconcile InitSQL ConfigMap")
 		return ctrl.Result{}, err
 	}
 
@@ -207,6 +215,42 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 	labels := labelsForMySQL(mysql)
 	replicas := mysql.Spec.Replicas
 
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "mysql-data",
+			MountPath: "/var/lib/mysql",
+		},
+	}
+
+	volumes := []corev1.Volume{
+		{
+			Name: "mysql-data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvcName,
+				},
+			},
+		},
+	}
+
+	if len(mysql.Spec.InitSQL) > 0 {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "init-sql",
+			MountPath: "/docker-entrypoint-initdb.d",
+		})
+
+		volumes = append(volumes, corev1.Volume{
+			Name: "init-sql",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: fmt.Sprintf("%s-init-sql", mysql.Name),
+					},
+				},
+			},
+		})
+	}
+
 	desired := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      deployName,
@@ -247,12 +291,7 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 									},
 								},
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "mysql-data",
-									MountPath: "/var/lib/mysql",
-								},
-							},
+							VolumeMounts: volumeMounts,
 							ReadinessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									TCPSocket: &corev1.TCPSocketAction{
@@ -273,16 +312,7 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 							},
 						},
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "mysql-data",
-							VolumeSource: corev1.VolumeSource{
-								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-									ClaimName: pvcName,
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 				},
 			},
 		},
@@ -299,11 +329,13 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 	// Update existing deployment if spec changed
 	updated := false
 
+	// replica sync
 	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != replicas {
 		deploy.Spec.Replicas = &replicas
 		updated = true
 	}
 
+	// image sync
 	desiredImage := fmt.Sprintf("mysql:%s", mysql.Spec.Version)
 
 	if len(deploy.Spec.Template.Spec.Containers) > 0 &&
@@ -312,6 +344,17 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 		mysql.Status.Phase = "Upgrading"
 		_ = r.Status().Update(ctx, mysql)
 		updated = true
+	}
+
+	// init sql mount sync
+	if len(deploy.Spec.Template.Spec.Containers) > 0 {
+		currentMounts := deploy.Spec.Template.Spec.Containers[0].VolumeMounts
+		desiredMounts := desired.Spec.Template.Spec.Containers[0].VolumeMounts
+		if len(currentMounts) != len(desiredMounts) {
+			deploy.Spec.Template.Spec.Volumes = desired.Spec.Template.Spec.Volumes
+			deploy.Spec.Template.Spec.Containers[0].VolumeMounts = desiredMounts
+			updated = true
+		}
 	}
 
 	if updated {
@@ -324,6 +367,42 @@ func (r *MySQLInstanceReconciler) reconcileDeployment(ctx context.Context, mysql
 // ──────────────────────────────────────────────
 // Service
 // ──────────────────────────────────────────────
+
+func (r *MySQLInstanceReconciler) reconcileInitSQLConfigMap(ctx context.Context, mysql *dbv1.MySQLInstance) error {
+	if len(mysql.Spec.InitSQL) == 0 {
+		return nil
+	}
+
+	configMapName := fmt.Sprintf("%s-init-sql", mysql.Name)
+
+	cm := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      configMapName,
+		Namespace: mysql.Namespace,
+	}, cm)
+
+	sql := strings.Join(mysql.Spec.InitSQL, ";\n") + ";"
+
+	if errors.IsNotFound(err) {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      configMapName,
+				Namespace: mysql.Namespace,
+			},
+			Data: map[string]string{
+				"init.sql": sql,
+			},
+		}
+
+		if err := controllerutil.SetControllerReference(mysql, cm, r.Scheme); err != nil {
+			return err
+		}
+
+		return r.Create(ctx, cm)
+	}
+
+	return nil
+}
 
 func (r *MySQLInstanceReconciler) reconcileService(ctx context.Context, mysql *dbv1.MySQLInstance) error {
 	svcName := fmt.Sprintf("%s-mysql", mysql.Name)
