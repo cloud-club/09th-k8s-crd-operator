@@ -68,6 +68,8 @@ spec:
                 type: integer
               rootPasswordSecret:
                 type: string
+              storageClassName:
+                type: string
               storageSize:
                 default: 1Gi
                 pattern: ^\d+(Mi|Gi)$

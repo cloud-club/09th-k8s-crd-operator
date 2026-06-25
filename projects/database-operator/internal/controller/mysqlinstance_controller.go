@@ -200,6 +200,7 @@ func (r *MySQLInstanceReconciler) reconcilePVC(ctx context.Context, mysql *dbv1.
 				Labels:    labelsForMySQL(mysql),
 			},
 			Spec: corev1.PersistentVolumeClaimSpec{
+				StorageClassName: &mysql.Spec.StorageClassName,
 				AccessModes: []corev1.PersistentVolumeAccessMode{
 					corev1.ReadWriteOnce,
 				},
