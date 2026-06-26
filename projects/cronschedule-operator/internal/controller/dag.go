@@ -23,6 +23,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -30,6 +31,65 @@ import (
 
 	cronv1 "github.com/cloud-club/09th-k8s-crd-operator/projects/cronschedule-operator/api/v1"
 )
+
+// dataVolumeName - Pod 스펙에서 PVC를 참조하는 볼륨 이름
+// dataMountPath - 모든 task 컨테이너에 공통으로 마운트되는 경로
+// extract가 이 경로 아래에 파일을 쓰면 transform/load가 같은 경로에서 그대로 읽을 수 있다.
+const (
+	dataVolumeName = "data"
+	dataMountPath  = "/data"
+)
+
+// dataPVCName - CronJobSchedule 하나당 공유 데이터 PVC 하나를 쓰기 위한 이름 규칙
+//
+// run마다 PVC를 새로 만들지 않고 재사용하는 이유: 클러스터 기본 StorageClass(Cinder CSI)가
+// WaitForFirstConsumer + ReadWriteOnce라서, run마다 새로 만들면 매번 프로비저닝/삭제 오버헤드가
+// 생긴다. 대신 task 컨테이너에 RUN_ID 환경변수를 주입해서 스크립트가 /data/$RUN_ID/ 형태로
+// run별 폴더를 직접 구분하게 한다.
+func dataPVCName(cjsName string) string {
+	return fmt.Sprintf("%s-data", cjsName)
+}
+
+// ensureDataPVC는 cjs 전용 공유 PVC가 없으면 만든다. 이미 있으면 아무것도 하지 않는다.
+// OwnerReference를 걸어서 CronJobSchedule이 삭제되면 PVC도 GC로 같이 정리되게 한다.
+func (r *CronJobScheduleReconciler) ensureDataPVC(ctx context.Context, cjs *cronv1.CronJobSchedule) error {
+	name := dataPVCName(cjs.Name)
+	existing := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: cjs.Namespace}, existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cjs.Namespace,
+			Labels:    map[string]string{"cronjobschedule": cjs.Name},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			// Cinder CSI는 ReadWriteMany를 지원하지 않는다. WaitForFirstConsumer 덕분에
+			// 첫 Pod가 스케줄된 노드에 볼륨이 묶이고, 이후 같은 PVC를 쓰는 Pod들은
+			// 스케줄러가 자동으로 그 노드에 맞춰 배치된다(같은 노드 안에서는 여러 Pod가
+			// 동시에 RWO 볼륨을 마운트할 수 있다) — 그래서 fan-out 병렬 task들도 문제없다.
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("1Gi"),
+				},
+			},
+		},
+	}
+	if err := ctrl.SetControllerReference(cjs, pvc, r.Scheme); err != nil {
+		return err
+	}
+	if err := r.Create(ctx, pvc); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
 
 // dependency 체크는 모든 task마다 반복적으로 일어나는데, 매번 TaskStatus 슬라이스를
 // 처음부터 순회(O(n))하면 task가 많아질수록 느려진다. 한 번 map으로 변환해두면
@@ -134,6 +194,25 @@ func (r *CronJobScheduleReconciler) createJobForTask(
 							Image:   task.Image,
 							Command: task.Command,
 							Args:    task.Args,
+							// RUN_ID를 넣어주는 이유: /data PVC는 CronJobSchedule 하나당
+							// 하나를 재사용하므로, 스크립트가 RUN_ID로 /data/$RUN_ID/ 같은
+							// run별 폴더를 직접 구분해야 다른 run의 데이터와 안 섞인다.
+							Env: []corev1.EnvVar{
+								{Name: "RUN_ID", Value: runID},
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: dataVolumeName, MountPath: dataMountPath},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: dataVolumeName,
+							VolumeSource: corev1.VolumeSource{
+								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+									ClaimName: dataPVCName(cjs.Name),
+								},
+							},
 						},
 					},
 				},
@@ -208,6 +287,11 @@ func (r *CronJobScheduleReconciler) syncRunningTasks(
 func (r *CronJobScheduleReconciler) executeDag(
 	ctx context.Context, cjs *cronv1.CronJobSchedule, runID string,
 ) error {
+	// 0. task들이 데이터를 주고받을 공유 PVC가 없으면 먼저 만든다.
+	if err := r.ensureDataPVC(ctx, cjs); err != nil {
+		return err
+	}
+
 	// 1. 이 run을 처음 보는 거라면 ExecutionRecord를 새로 만들고, 모든 task를
 	//    Pending으로 초기화한다.
 	record := findRecordByRunID(cjs.Status.ExecutionHistory, runID)

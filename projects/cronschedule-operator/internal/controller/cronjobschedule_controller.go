@@ -43,6 +43,7 @@ type CronJobScheduleReconciler struct {
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cron.example.com,resources=cronjobschedules/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 
 func (r *CronJobScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
